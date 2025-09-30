@@ -1,0 +1,18 @@
+[submodule "dmt-simulator"]
+	path = dmt-simulator
+	url = ./dmt-simulator/
+[submodule "huge-page-sim"]
+	path = huge-page-sim
+	url = ./huge-page-sim/
+[submodule "qemu"]
+	path = qemu
+	url = ./qemu/
+[submodule "shadow_pgtbl_kernel"]
+	path = shadow_pgtbl_kernel
+	url = ./shadow_pgtbl_kernel/
+[submodule "tracer"]
+	path = tracer
+	url = ./tracer/
+[submodule "workloads"]
+	path = workloads
+	url = ./workloads/
