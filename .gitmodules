@@ -20,3 +20,7 @@
 [submodule "osv-dynamorio"]
 	path = osv-dynamorio
 	url = git@github.com:noobmyq/dynamorio-tp.git
+	branch = qemu-dynamorio
+[submodule "qemu-linux"]
+	path = qemu-linux
+	url = git@github.com:noobmyq/tp-qemu.git
