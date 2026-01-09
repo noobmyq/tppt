@@ -1,18 +1,18 @@
 [submodule "dmt-simulator"]
 	path = dmt-simulator
-	url = git@github.com:noobmyq/dynamorio-tp.git
+	url = https://github.com/noobmyq/dynamorio-tp.git
 [submodule "huge-page-sim"]
 	path = huge-page-sim
 	url = ./huge-page-sim/
 [submodule "qemu"]
 	path = qemu
-	url = git@github.com:noobmyq/tp-qemu.git
+	url = https://github.com/noobmyq/tp-qemu.git
 [submodule "shadow_pgtbl_kernel"]
 	path = shadow_pgtbl_kernel
-	url = git@github.com:noobmyq/shadow_pgtbl_kernel.git
+	url = https://github.com/noobmyq/shadow_pgtbl_kernel.git
 [submodule "tracer"]
 	path = tracer
-	url = git@github.com:noobmyq/pgtbl-tracer.git
+	url = https://github.com/noobmyq/pgtbl-tracer.git
 [submodule "workloads"]
 	path = workloads
-	url = git@github.com:noobmyq/pgtbl-workloads.git
+	url = https://github.com/noobmyq/pgtbl-workloads.git
