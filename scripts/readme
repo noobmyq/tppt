@@ -1,0 +1,20 @@
+## readme
+* need to run, notice the newgrp kvm to make the group change effective
+
+ **it seems that changing the group to kvm will cause unexpected behavior to OSv setup, so always check group identifier with `id` before setting up OSv**
+ 
+ **or, use `sg kvm -c` for qemu**
+```shell
+sudo usermod -aG kvm $USER
+newgrp kvm
+source source.sh
+```
+
+## shmem setup
+* need to use manually built qemu to run so that it has newest AVX
+```shell
+rum # define in source.sh
+### inside vm
+cd apps/shmem_matmu
+make mem
+```
