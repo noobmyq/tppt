@@ -10,6 +10,7 @@
 [submodule "shadow_pgtbl_kernel"]
 	path = shadow_pgtbl_kernel
 	url = git@github.com:noobmyq/shadow_pgtbl_kernel.git
+	branch = main
 [submodule "tracer"]
 	path = tracer
 	url = git@github.com:noobmyq/pgtbl-tracer.git
@@ -24,3 +25,7 @@
 [submodule "qemu-linux"]
 	path = qemu-linux
 	url = git@github.com:noobmyq/tp-qemu.git
+	branch = my-qemu
+[submodule "osv"]
+	path = osv
+	url = git@github.com:noobmyq/OSv-tp.git
