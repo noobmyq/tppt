@@ -5,9 +5,6 @@ export BASE_DIR=$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)
 export DISK="$BASE_DIR/disk.img"
 export SIZE="100G"
 export MNTPNT="$BASE_DIR/mount.point"
-export OS="focal"
-export ARCH="amd64"
-export KERNEL=`uname -r`
 export USER=$USER
 
 alias ch='sudo -i chroot $MNTPNT'

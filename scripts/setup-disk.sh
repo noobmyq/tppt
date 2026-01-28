@@ -2,12 +2,13 @@
 
 set -euo pipefail
 
+OS="focal"
+ARCH="amd64"
+
 # check if envvar exists: DISK, SIZE, MNTPNT, OS, ARCH
 : "${DISK:?DISK not set}"
 : "${SIZE:?SIZE not set}"
 : "${MNTPNT:?MNTPNT not set}"
-: "${OS:?OS not set}"
-: "${ARCH:?ARCH not set}"
 
 # use current user
 PASS=$USER

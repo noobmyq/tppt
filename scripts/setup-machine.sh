@@ -8,7 +8,7 @@ echo "Starting System Setup..."
 sudo apt update
 sudo apt install ca-certificates -y
 sudo update-ca-certificates
-sudo apt install python3 python3-pip python3-venv ninja-build python3-sphinx pkg-config libglib2.0-dev libpixman-1-dev build-essential libncurses-dev bison flex libssl-dev libelf-dev cmake texlive-latex-extra texlive-fonts-recommended dvipng cm-super bear debootstrap -y
+sudo apt install python3 python3-pip python3-venv ninja-build python3-sphinx pkg-config libglib2.0-dev libpixman-1-dev build-essential libaio-dev libncurses-dev bison flex libssl-dev libelf-dev cmake texlive-latex-extra texlive-fonts-recommended dvipng cm-super bear debootstrap -y
 # install gcc-7 and g++-7 for dynamorio, temporarily add 20.04 sources
 echo "deb [trusted=yes] http://archive.ubuntu.com/ubuntu/ focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
 sudo apt update

@@ -40,6 +40,14 @@ cd apps/graphbig
 # it seems that the server is crashed sometimes
 ./get_dataset.sh "social_network-sf10-numpart-1"
 ./get_dataset.sh "social_network-sf3-numpart-1"
+# configure memcached
+cd ../memcached
+./autogen.sh
+./configure LDFLAGS="-static"
+# configure sysbench
+cd ../sysbench
+./autogen.sh
+./configure --prefix=$(pwd)/build --without-mysql
 popd
 
 pushd osv-dynamorio
