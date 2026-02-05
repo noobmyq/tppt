@@ -48,6 +48,12 @@ cd ../memcached
 cd ../sysbench
 ./autogen.sh
 ./configure --prefix=$(pwd)/build --without-mysql
+# get dataset for canneal
+cd ../canneal
+pip install gdown
+gdown 1gQbEGW-Z6oCo0zRIorF1AEo9JJEV5Vob
+mv canneal canneal-dataset
+cd ..
 popd
 
 pushd osv-dynamorio

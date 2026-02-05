@@ -16,7 +16,7 @@ TTYS=ttyS0
 
 SCRIPT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 APP_DIR=$SCRIPT_DIR/../workloads/qemu-dynamorio-workload/linux-workload
-
+MEM_APP_DIR=$SCRIPT_DIR/../workloads/qemu-dynamorio-workload/osv-workload
 # change directory to parent directory
 cd "$SCRIPT_DIR/.."
 
@@ -49,6 +49,14 @@ chroot_run sed -i "/User privilege specification/a $USER\tALL=(ALL) NOPASSWD:ALL
 chroot_run mkdir -p /home/$USER/apps
 sudo cp -r $APP_DIR/* $MNTPNT/home/$USER/apps
 chroot_run chown -R $USER:$USER /home/$USER/
+
+# make sure /home/$USER/mem-apps exists
+chroot_run mkdir -p /home/$USER/mem-apps
+sudo cp -r $MEM_APP_DIR/* $MNTPNT/home/$USER/mem-apps
+chroot_run chown -R $USER:$USER /home/$USER/mem-apps
+
+# inside mem-apps we need to build those apps as user $USER
+# TODO: build the apps inside the chroot as $USER
 
 chroot_run apt-get update
 chroot_run apt-get install --yes sysstat psmisc
