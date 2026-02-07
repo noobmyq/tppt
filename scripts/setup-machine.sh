@@ -69,6 +69,9 @@ git clone git@github.com:noobmyq/tppt.git
 cd tppt 
 git submodule update --init --recursive
 git config submodule.huge-page-sim.update none
+cd osv
+git checkout tp-osv
+cd ..
 git submodule update --recursive --remote
 
 git clone --recursive git@github.com:noobmyq/OSv-tp.git osv
