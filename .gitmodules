@@ -29,9 +29,8 @@
 [submodule "osv"]
 	path = osv
 	url = git@github.com:noobmyq/OSv-tp.git
+	branch = tp-osv
 [submodule "tp-emt-dynamorio"]
 	path = tp-emt-dynamorio
 	url = git@github.com:noobmyq/dynamorio-tp.git
 	branch = tp-emt-dynamorio
-[submodule]
-	osv = tp-osv
