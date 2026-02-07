@@ -41,7 +41,7 @@ cd apps/graphbig
 ./get_dataset.sh "social_network-sf10-numpart-1"
 ./get_dataset.sh "social_network-sf3-numpart-1"
 # configure memcached
-cd ../memcached
+cd ../memcached-osv
 ./autogen.sh
 ./configure LDFLAGS="-static"
 # configure sysbench
@@ -51,7 +51,7 @@ cd ../sysbench
 # get dataset for canneal
 cd ../canneal
 pip install gdown
-gdown 1gQbEGW-Z6oCo0zRIorF1AEo9JJEV5Vob
+~/.local/bin/gdown 1gQbEGW-Z6oCo0zRIorF1AEo9JJEV5Vob
 mv canneal canneal-dataset
 cd ..
 popd

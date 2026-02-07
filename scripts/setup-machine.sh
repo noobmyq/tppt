@@ -67,7 +67,7 @@ ssh -T git@github.com
 cd /mnt/storage
 git clone git@github.com:noobmyq/tppt.git
 cd tppt 
-git submodule init
+git submodule update --init --recursive
 git config submodule.huge-page-sim.update none
 git submodule update --recursive --remote
 
