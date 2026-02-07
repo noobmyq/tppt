@@ -67,13 +67,12 @@ ssh -T git@github.com
 cd /mnt/storage
 git clone git@github.com:noobmyq/tppt.git
 cd tppt 
-git submodule update --init --recursive
-git config submodule.huge-page-sim.update none
+git config huge-page-sim.active false
+git submodule update --init
 cd osv
 git checkout tp-osv
 cd ..
-git submodule update --recursive --remote
+git submodule update --init --recursive osv
 
-git clone --recursive git@github.com:noobmyq/OSv-tp.git osv
 
 
