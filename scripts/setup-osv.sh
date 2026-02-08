@@ -39,7 +39,7 @@ cd apps/graphbig
 # if this takes a long time, try to download manually
 # it seems that the server is crashed sometimes
 ./get_dataset.sh "social_network-sf10-numpart-1"
-./get_dataset.sh "social_network-sf3-numpart-1"
+./get_dataset.sh "social_network-sf30-numpart-1"
 # configure memcached
 cd ../memcached-osv
 ./autogen.sh
@@ -51,8 +51,8 @@ cd ../sysbench
 # get dataset for canneal
 cd ../canneal
 pip install gdown
-~/.local/bin/gdown 1gQbEGW-Z6oCo0zRIorF1AEo9JJEV5Vob
-mv canneal canneal-dataset
+~/.local/bin/gdown 1gQbEGW-Z6oCo0zRIorF1AEo9JJEV5Vob -O canneal-dataset
+head -n 5000000 canneal-dataset > canneal-dataset-small
 cd ..
 popd
 
