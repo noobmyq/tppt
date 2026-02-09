@@ -6,6 +6,7 @@ if [ "$NUM_CORES" -gt 30 ]; then
 fi
 cd ..
 pushd workloads
+git checkout main
 SRC="qemu-dynamorio-workload/osv-workload"
 DEST="../osv/apps"
 
