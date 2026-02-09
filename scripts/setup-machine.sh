@@ -67,7 +67,7 @@ ssh -T git@github.com
 cd /mnt/storage
 git clone git@github.com:noobmyq/tppt.git
 cd tppt 
-git config huge-page-sim.active false
+git config submodule.huge-page-sim.active false
 git submodule update --init
 cd osv
 git checkout tp-osv
