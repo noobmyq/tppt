@@ -9,6 +9,7 @@ ARCH="amd64"
 : "${DISK:?DISK not set}"
 : "${SIZE:?SIZE not set}"
 : "${MNTPNT:?MNTPNT not set}"
+: "${USER:?USER not set}"
 
 # use current user
 PASS=$USER
@@ -40,6 +41,8 @@ chroot_run rm -f /etc/init/tty[2345678].conf
 chroot_run sed -i "s:/dev/tty\\[1-[2-8]\\]:/dev/tty1:g" /etc/default/console-setup
 
 chroot_run adduser $USER --disabled-password --gecos ""
+# Set password to be the same as the username
+echo "$USER:$USER" | sudo chroot $MNTPNT chpasswd
 
 chroot_run sed -i "s/^ExecStart.*$/ExecStart=-\/sbin\/agetty --noissue --autologin $USER %I $TERM/g" /lib/systemd/system/getty@.service
 chroot_run sed -i "/User privilege specification/a $USER\tALL=(ALL) NOPASSWD:ALL" /etc/sudoers
@@ -54,6 +57,10 @@ chroot_run chown -R $USER:$USER /home/$USER/
 chroot_run mkdir -p /home/$USER/mem-apps
 sudo cp -r $MEM_APP_DIR/* $MNTPNT/home/$USER/mem-apps
 chroot_run chown -R $USER:$USER /home/$USER/mem-apps
+
+# copy scripts
+sudo cp $SCRIPT_DIR/pte_stats_monitor.sh $MNTPNT/home/$USER/
+chroot_run chown $USER:$USER /home/$USER/pte_stats_monitor.sh
 
 # inside mem-apps we need to build those apps as user $USER
 # TODO: build the apps inside the chroot as $USER

@@ -35,7 +35,7 @@ sudo ./scripts/setup.py
 export CFLAGS="-Wno-error"
 export CXXFLAGS="-Wno-error"
 #test a build
-./scripts/build -j4 fs=rofs image=native-example
+./scripts/build -j4 fs=rofs image=xsbench mode=debug
 cd apps/graphbig
 # if this takes a long time, try to download manually
 # it seems that the server is crashed sometimes

@@ -62,3 +62,8 @@ chroot_run_as_user "cd /home/$USER/mem-apps/canneal && make module && cp canneal
 chroot_run_as_user "cd /home/$USER/mem-apps/gups && make module && cp gups mosaictest"
 chroot_run_as_user "cd /home/$USER/mem-apps/memcached-osv && ./autogen.sh && ./configure LDFLAGS=\"-static\" && make module && cp memcached mosaictest"
 chroot_run_as_user "cd /home/$USER/mem-apps/xsbench && make module && cp xsbench mosaictest"
+
+# for graphbig
+chroot_run_as_user "cd /home/$USER/mem-apps/graphbig/ && make module"
+# we for loop the bin in graphbig/bin/* and then copy them to has prefix mosaictest
+chroot_run_as_user "for bin in /home/$USER/mem-apps/graphbig/bin/*; do cp \$bin /home/$USER/mem-apps/graphbig/bin/mosaictest-`basename \$bin`; done"

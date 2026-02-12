@@ -14,7 +14,7 @@ popd
 pushd shadow_pgtbl_kernel
 cp cur_config .config
 make olddefconfig
-make -j${NUM_CORES}
+bear -- make -j${NUM_CORES}
 popd
 
 # create disk image
