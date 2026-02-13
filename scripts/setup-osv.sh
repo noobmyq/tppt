@@ -26,7 +26,9 @@ popd
 pushd qemu
 git checkout osv-qemu
 ./setup-qemu.sh
+./setup-qemu-32bit.sh
 make -C build -j${NUM_CORES}
+make -C build-32bit -j${NUM_CORES}
 popd
 
 pushd osv
@@ -41,6 +43,18 @@ cd apps/graphbig
 # it seems that the server is crashed sometimes
 ./get_dataset.sh "social_network-sf10-numpart-1"
 ./get_dataset.sh "social_network-sf30-numpart-1"
+# download dataset for LDBC-1000k, this is a dense graph
+~/.local/bin/gdown 'https://drive.google.com/uc?export=download&id=1fuk5tadoU4oHtXUNJUusQo868vS_-dSB' -O LDBC.tar
+tar -xf LDBC.tar --directory .
+
+# make sure if LDBC/output-1000k folder exists
+if [ ! -d "LDBC/output-1000k" ]; then
+    echo "LDBC/output-1000k folder does not exist"
+    exit 1
+fi
+
+rm LDBC.tar
+
 # configure memcached
 cd ../memcached-osv
 ./autogen.sh
