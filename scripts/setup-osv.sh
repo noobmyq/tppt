@@ -46,6 +46,9 @@ cd apps/graphbig
 # download dataset for LDBC-1000k, this is a dense graph
 ~/.local/bin/gdown 'https://drive.google.com/uc?export=download&id=1fuk5tadoU4oHtXUNJUusQo868vS_-dSB' -O LDBC.tar
 tar -xf LDBC.tar --directory .
+# download dataset for sf300
+~/.local/bin/gdown '155pf8uyxBN6bLfVAinjpr11CIgvqAUn9' --output sf300-dataset.zip
+unzip sf300-dataset.zip -d ./snb-sf300
 
 # make sure if LDBC/output-1000k folder exists
 if [ ! -d "LDBC/output-1000k" ]; then
@@ -54,6 +57,12 @@ if [ ! -d "LDBC/output-1000k" ]; then
 fi
 
 rm LDBC.tar
+
+# make sure if snb-sf300 folder exists
+if [ ! -d "snb-sf300" ]; then
+    echo "snb-sf300 folder does not exist"
+    exit 1
+fi
 
 # configure memcached
 cd ../memcached-osv
