@@ -41,8 +41,8 @@ export CXXFLAGS="-Wno-error"
 cd apps/graphbig
 # if this takes a long time, try to download manually
 # it seems that the server is crashed sometimes
-./get_dataset.sh "social_network-sf10-numpart-1"
-./get_dataset.sh "social_network-sf30-numpart-1"
+./get_dataset.sh "social_network-sf10-numpart-1" "snb"
+./get_dataset.sh "social_network-sf30-numpart-1" "snb"
 # download dataset for LDBC-1000k, this is a dense graph
 ~/.local/bin/gdown 'https://drive.google.com/uc?export=download&id=1fuk5tadoU4oHtXUNJUusQo868vS_-dSB' -O LDBC.tar
 tar -xf LDBC.tar --directory .
