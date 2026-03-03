@@ -34,3 +34,7 @@
 	path = tp-emt-dynamorio
 	url = git@github.com:noobmyq/dynamorio-tp.git
 	branch = tp-emt-dynamorio
+[submodule "dynamorio-puresim"]
+	path = dynamorio-puresim
+	url = git@github.com:noobmyq/dynamorio-tp.git
+	branch = no-pgtbl-load
