@@ -1,9 +1,6 @@
 [submodule "dmt-simulator"]
 	path = dmt-simulator
 	url = git@github.com:noobmyq/dynamorio-tp.git
-[submodule "huge-page-sim"]
-	path = huge-page-sim
-	url = ./huge-page-sim/
 [submodule "qemu"]
 	path = qemu
 	url = git@github.com:noobmyq/tp-qemu.git
