@@ -16,7 +16,7 @@ sudo apt install gcc-7 g++-7 -y
 sudo rm /etc/apt/sources.list.d/focal.list
 # install python packages
 pip3 install numpy matplotlib pandas scienceplots
-
+pip install gdown
 
 # 1. Install RAID tools
 sudo apt update
@@ -73,6 +73,5 @@ cd osv
 git checkout tp-osv
 cd ..
 git submodule update --init --recursive osv
-
 
 

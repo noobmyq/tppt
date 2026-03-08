@@ -4,6 +4,16 @@ set -euo pipefail
 
 # make sure $MNTPNT is set
 : "${MNTPNT:?MNTPNT not set}"
+: "${USER:?USER not set}"
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
+BASE_DIR=$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)
+
+# make sure mntpnt is mounted
+if ! grep -qs "$MNTPNT" /proc/mounts; then
+    echo "$MNTPNT is not mounted. Please mount it before running this script."
+    exit 1
+fi
 
 function chroot_run {
 	sudo chroot $MNTPNT "$@"
@@ -26,6 +36,7 @@ COMMON_LIBS=(
     libicu-dev
     pkg-config
     libevent-dev
+    numactl
 )
 
 # redis libs
@@ -66,4 +77,12 @@ chroot_run_as_user "cd /home/$USER/mem-apps/xsbench && make module && cp xsbench
 # for graphbig
 chroot_run_as_user "cd /home/$USER/mem-apps/graphbig/ && make module"
 # we for loop the bin in graphbig/bin/* and then copy them to has prefix mosaictest
-chroot_run_as_user "for bin in /home/$USER/mem-apps/graphbig/bin/*; do cp \$bin /home/$USER/mem-apps/graphbig/bin/mosaictest-`basename \$bin`; done"
+chroot_run_as_user "for bin in /home/$USER/mem-apps/graphbig/bin/*; do cp \"\$bin\" /home/$USER/mem-apps/graphbig/bin/mosaictest-\$(basename \"\$bin\"); done"
+
+sudo mkdir -p "$MNTPNT/home/$USER/thp_alloc_exp"
+sudo cp -r "$BASE_DIR/thp_alloc_exp/allocator_exp" "$MNTPNT/home/$USER/thp_alloc_exp/allocator_exp"
+chroot_run chown -R "$USER:$USER" "/home/$USER/thp_alloc_exp"
+
+# build and install THP experiment binaries under /home/$USER/apps
+chroot_run_as_user "gcc -O2 -Wall /home/$USER/thp_alloc_exp/allocator_exp/frag_severe.c -o /home/$USER/thp_alloc_exp/alloctest"
+chroot_run_as_user "cp /home/$USER/mem-apps/xsbench/xsbench /home/$USER/thp_alloc_exp/tp_frag"

@@ -86,3 +86,14 @@ git checkout qemu-dynamorio
 sed -i '147s/FATAL_ERROR/STATUS/' core/CMake_readelf.cmake
 ./build_dynamorio.sh osv
 popd
+
+# build dynamorio
+pushd tp-emt-dynamorio
+git checkout tp-emt-dynamorio
+./build_dynamorio.sh osv
+popd
+
+pushd osv-dynamorio
+git checkout qemu-dynamorio
+./build_dynamorio.sh osv
+popd

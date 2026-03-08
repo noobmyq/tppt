@@ -53,13 +53,13 @@ chroot_run mkdir -p /home/$USER/apps
 sudo cp -r $APP_DIR/* $MNTPNT/home/$USER/apps
 chroot_run chown -R $USER:$USER /home/$USER/
 
-# make sure /home/$USER/mem-apps exists
+# # make sure /home/$USER/mem-apps exists
 chroot_run mkdir -p /home/$USER/mem-apps
 sudo cp -r $MEM_APP_DIR/* $MNTPNT/home/$USER/mem-apps
 chroot_run chown -R $USER:$USER /home/$USER/mem-apps
 
 # copy scripts
-sudo cp $SCRIPT_DIR/pte_stats_monitor.sh $MNTPNT/home/$USER/
+sudo cp $SCRIPT_DIR/pte_control_conf/vmfiles/pte_stats_monitor.sh $MNTPNT/home/$USER/
 chroot_run chown $USER:$USER /home/$USER/pte_stats_monitor.sh
 
 # inside mem-apps we need to build those apps as user $USER
