@@ -1,0 +1,46 @@
+# Steps to run the allocator test (assuming you are in the current folder)
+
+1. Make sure the kernel images exist.
+    ```bash
+    ls -l build/tp/arch/x86/boot/bzImage
+    # should return a file
+    ls -l build/vanilla/arch/x86/boot/bzImage
+    # should return a file
+
+    # make sure you are in the correct group
+    sudo usermod -aG kvm $USER
+    newgrp kvm
+    # this will affect other experiments because of group permissions
+    # I suggest doing these experiments in a separate session
+    # or pressing Ctrl+D after finishing the experiments to drop the new group permission
+
+    id # you can use this command to check if you are in the kvm group
+
+    ```
+
+2. Run the TP script.
+    ```bash
+    NODE0_MEM=20G NODE1_MEM=10G ./run_thp_qemu.sh -k tp
+    ```
+
+    1. This will boot the TP kernel with 20GB memory on node0 and 10GB memory on node1. The entire TP pool is in node0.
+    2. Inside the VM, run some verification commands to check the memory status:
+        ```bash
+        free -h
+        # should have ~20GB free memory as 10GB is carved out by TP pool
+
+        cat /proc/iceberg
+        # should show something like this:
+        # Utilization: 0/2600960
+        # Huge pages available: 5080/5080
+        # Fragmentation index: 0.000
+        # ...
+        ```
+    3. go to experiment dir:
+        ```bash
+        cd /home/$USER/thp_alloc_exp/allocator_exp
+
+        # may need to chmod +x the script
+        ./thp_alloc.sh tp
+        ```
+
