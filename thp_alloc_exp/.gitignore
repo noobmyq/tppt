@@ -1,7 +1,8 @@
 src
 build
 configs
-results
+results/*
+!results/plot_pause_ratio.py
 allocator_exp/thp_alloc_results_*
 frag_probe_pause
 .pause_ctrl
