@@ -1,3 +1,7 @@
 src
 build
 configs
+results
+allocator_exp/thp_alloc_results_*
+frag_probe_pause
+.pause_ctrl
