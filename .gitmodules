@@ -35,3 +35,7 @@
 	path = dynamorio-puresim
 	url = git@github.com:noobmyq/dynamorio-tp.git
 	branch = no-pgtbl-load
+[submodule "linux-tp"]
+	path = linux-tp
+	url = git@github.com:noobmyq/linux-tp.git
+	branch = main
