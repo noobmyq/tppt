@@ -72,7 +72,7 @@ chroot_run_as_user "cd /home/$USER/mem-apps/btree && make && cp BTree mosaictest
 chroot_run_as_user "cd /home/$USER/mem-apps/canneal && make module && cp canneal mosaictest"
 chroot_run_as_user "cd /home/$USER/mem-apps/gups && make module && cp gups mosaictest"
 chroot_run_as_user "cd /home/$USER/mem-apps/memcached-osv && ./autogen.sh && ./configure LDFLAGS=\"-static\" && make module && cp memcached mosaictest"
-chroot_run_as_user "cd /home/$USER/mem-apps/xsbench && make module && cp xsbench mosaictest"
+chroot_run_as_user "cd /home/$USER/mem-apps/xsbench && rm xsbench && make module && cp xsbench mosaictest"
 
 # for graphbig
 chroot_run_as_user "cd /home/$USER/mem-apps/graphbig/ && make module"

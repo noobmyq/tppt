@@ -131,6 +131,12 @@ build_kernel() {
     make -C "${src}" O="${out}" KCONFIG_CONFIG="${out}/.config" olddefconfig
     make -C "${src}" O="${out}" KCONFIG_CONFIG="${out}/.config" -j"${JOBS}" vmlinux bzImage
 
+    make -C "${src}" O="${out}" KCONFIG_CONFIG="${out}/.config" scripts_gdb
+
+    if [[ ! -f "${out}/vmlinux-gdb.py" ]]; then
+        ln -fs "${src}/scripts/gdb/vmlinux-gdb.py" "${out}/vmlinux-gdb.py"
+    fi
+
     if [[ ! -f "${out}/arch/x86/boot/bzImage" ]]; then
         echo "Build finished but bzImage missing for ${name}" >&2
         exit 1
