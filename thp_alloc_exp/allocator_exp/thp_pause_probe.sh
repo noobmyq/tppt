@@ -257,8 +257,11 @@ case "$FRAGMENTOR" in
   random)
     BIN_SRC="${EXP_BASE}/allocator_exp/frag_random_pause.c"
     ;;
+  sequential|seq)
+    BIN_SRC="${EXP_BASE}/allocator_exp/frag_seq_pause.c"
+    ;;
   *)
-    echo "FRAGMENTOR must be 'grid' or 'random' (got '$FRAGMENTOR')"
+    echo "FRAGMENTOR must be 'grid', 'random', or 'sequential' (got '$FRAGMENTOR')"
     exit 1
     ;;
 esac

@@ -758,6 +758,7 @@ def main() -> int:
         plt.xlabel("pause_idx")
         plt.ylabel("hugepage available / hugepage theory")
         plt.title(f"Hugepage Availability Over Theory ({run_name})")
+        plt.ylim(0, 1)
         plt.grid(True, alpha=0.35)
         plt.legend()
         plt.tight_layout()
