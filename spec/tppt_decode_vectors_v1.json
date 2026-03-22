@@ -1,0 +1,113 @@
+{
+  "version": "tppt-decode-v1",
+  "seed0": 2846245,
+  "seed1": 8384032,
+  "bin_stride_pages": 127,
+  "vectors": [
+    {
+      "name": "data_h0_primary",
+      "addr_component": 81985529216486895,
+      "pid_token": 287454020,
+      "tp": 5,
+      "pool_base_pfn": 2097152,
+      "bin_count": 4096,
+      "expect": {
+        "kind": "data",
+        "hsel": 0,
+        "s_idx": 5,
+        "h0": 3713,
+        "h1": 535,
+        "bin": 3713,
+        "pfn": 2568707
+      }
+    },
+    {
+      "name": "data_h1_primary",
+      "addr_component": 81985529216486895,
+      "pid_token": 287454020,
+      "tp": 133,
+      "pool_base_pfn": 2097152,
+      "bin_count": 4096,
+      "expect": {
+        "kind": "data",
+        "hsel": 1,
+        "s_idx": 5,
+        "h0": 3713,
+        "h1": 535,
+        "bin": 535,
+        "pfn": 2165101
+      }
+    },
+    {
+      "name": "data_h0_lowkey",
+      "addr_component": 4096,
+      "pid_token": 0,
+      "tp": 127,
+      "pool_base_pfn": 524288,
+      "bin_count": 1024,
+      "expect": {
+        "kind": "data",
+        "hsel": 0,
+        "s_idx": 127,
+        "h0": 461,
+        "h1": 686,
+        "bin": 461,
+        "pfn": 582961
+      }
+    },
+    {
+      "name": "data_h1_lowkey",
+      "addr_component": 4096,
+      "pid_token": 0,
+      "tp": 255,
+      "pool_base_pfn": 524288,
+      "bin_count": 1024,
+      "expect": {
+        "kind": "data",
+        "hsel": 1,
+        "s_idx": 127,
+        "h0": 461,
+        "h1": 686,
+        "bin": 686,
+        "pfn": 611536
+      }
+    },
+    {
+      "name": "special_empty",
+      "addr_component": 4096,
+      "pid_token": 0,
+      "tp": 0,
+      "pool_base_pfn": 524288,
+      "bin_count": 1024,
+      "expect": {
+        "kind": "empty",
+        "hsel": 0,
+        "s_idx": 0
+      }
+    },
+    {
+      "name": "special_zeropage",
+      "addr_component": 4096,
+      "pid_token": 0,
+      "tp": 128,
+      "pool_base_pfn": 524288,
+      "bin_count": 1024,
+      "expect": {
+        "kind": "zeropage",
+        "hsel": 1,
+        "s_idx": 0
+      }
+    },
+    {
+      "name": "invalid_bin_count",
+      "addr_component": 4096,
+      "pid_token": 0,
+      "tp": 1,
+      "pool_base_pfn": 524288,
+      "bin_count": 0,
+      "expect": {
+        "kind": "invalid"
+      }
+    }
+  ]
+}
