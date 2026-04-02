@@ -35,7 +35,7 @@ sudo ./patch_trace_paths.sh
 
 git checkout dmt
 # this is the vanilla version of thp
-./build_thp_version.sh 
+./build_vanilla_thp.sh
 
 git checkout no-pgtbl-load
 popd
