@@ -1,3 +1,7 @@
 *.png
+*.csv
+impl_plan.md
+
 tp_width_lf_test
+tp_allocator_frag
 .vscode
