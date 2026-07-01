@@ -17,10 +17,11 @@ popd
 pushd $TRACER_DIR
 git checkout main
 
-sudo usermod -aG docker $USER
-newgrp docker
+if ! groups "$USER" | grep -qw docker; then
+  sudo usermod -aG docker "$USER"
+fi
 
-./build_dynamorio.sh
+sg docker -c './build_dynamorio.sh'
 cd dump_pagetables
 make clean
 ./install.sh
@@ -29,7 +30,6 @@ popd
 
 pushd $SIMULATOR_DIR
 git checkout no-pgtbl-load
-sudo ./patch_trace_paths.sh
 # tp version of thp
 ./build_thp_version.sh
 
