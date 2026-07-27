@@ -74,6 +74,43 @@ chroot_run apt-get install --yes initramfs-tools
 chroot_run apt-get install --yes time
 chroot_run apt-get install --yes vim 
 
+sudo tee $MNTPNT/tmp/tppt_exec.c >/dev/null <<'EOF'
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#ifndef __NR_tppt_execveat
+#define __NR_tppt_execveat 462
+#endif
+
+#define TPPT_EXEC_ENABLE (1ULL << 0)
+#define TPPT_EXEC_STRICT (1ULL << 1)
+
+extern char **environ;
+
+int main(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "usage: tppt_exec <program> [args...]\n");
+        return 2;
+    }
+
+    syscall(__NR_tppt_execveat, AT_FDCWD, argv[1], &argv[1], environ, 0,
+            TPPT_EXEC_ENABLE | TPPT_EXEC_STRICT);
+
+    perror("tppt_execveat");
+    return errno ? errno : 1;
+}
+EOF
+
+chroot_run gcc -O2 -Wall -static /tmp/tppt_exec.c -o /usr/local/bin/tppt_exec
+chroot_run chmod 755 /usr/local/bin/tppt_exec
+chroot_run rm -f /tmp/tppt_exec.c
+
 
 sudo umount $MNTPNT/dev;
 sudo umount $MNTPNT;

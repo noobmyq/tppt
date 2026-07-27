@@ -19,5 +19,21 @@ make olddefconfig
 bear -- make -j${NUM_CORES}
 popd
 
-# create disk image
+pushd qemu-linux
+git checkout native-tp-support
+if [ ! -f build/build.ninja ]; then
+	./configure --target-list=x86_64-softmmu --enable-debug \
+		--disable-linux-io-uring --enable-plugins
+fi
+make -C build -j${NUM_CORES}
+cp build/compile_commands.json .
+popd
 
+pushd linux-tp
+git checkout tppt/v6.8-clean
+cp tppt_config .config
+make olddefconfig
+bear -- make -j${NUM_CORES}
+popd
+
+# create disk image
