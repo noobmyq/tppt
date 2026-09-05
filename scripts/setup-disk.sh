@@ -18,8 +18,16 @@ TTYS=ttyS0
 SCRIPT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 APP_DIR=$SCRIPT_DIR/../workloads/qemu-dynamorio-workload/linux-workload
 MEM_APP_DIR=$SCRIPT_DIR/../workloads/qemu-dynamorio-workload/osv-workload
+MICROBENCH_DIR=$SCRIPT_DIR/../workloads/microbenchmark
 # change directory to parent directory
 cd "$SCRIPT_DIR/.."
+
+for source in Makefile fork_overhead.c tppt_huge_fork.c; do
+	if [[ ! -f "$MICROBENCH_DIR/$source" ]]; then
+		echo "missing required microbenchmark source: $MICROBENCH_DIR/$source" >&2
+		exit 1
+	fi
+done
 
 qemu-img create $DISK $SIZE
 
@@ -52,6 +60,12 @@ chroot_run sed -i "/User privilege specification/a $USER\tALL=(ALL) NOPASSWD:ALL
 chroot_run mkdir -p /home/$USER/apps
 sudo cp -r $APP_DIR/* $MNTPNT/home/$USER/apps
 chroot_run chown -R $USER:$USER /home/$USER/
+
+# make sure /home/$USER/microbenchmark exists
+chroot_run mkdir -p /home/$USER/microbenchmark
+sudo cp -r $MICROBENCH_DIR/* $MNTPNT/home/$USER/microbenchmark
+sudo rm -f $MNTPNT/home/$USER/microbenchmark/unit_*
+chroot_run chown -R $USER:$USER /home/$USER/microbenchmark
 
 # # make sure /home/$USER/mem-apps exists
 chroot_run mkdir -p /home/$USER/mem-apps

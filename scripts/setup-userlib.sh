@@ -55,7 +55,11 @@ POSTGRES_LIBS=(
 chroot_run apt-get update
 chroot_run apt-get install -y ${COMMON_LIBS[@]} ${REDIS_LIBS[@]} ${POSTGRES_LIBS[@]}
 
-# go into /home/$USER/apps/redis and build as $USER
+# build microbenchmark
+chroot_run_as_user "cd /home/$USER/microbenchmark && make clean && make"
+for binary in unit_fork_overhead unit_tppt_huge_fork; do
+    chroot_run test -x "/home/$USER/microbenchmark/$binary"
+done
 
 # build redis
 chroot_run_as_user "cd /home/$USER/apps/redis && make && make bench_redis_st && cp bench_redis_st mosaictest"
