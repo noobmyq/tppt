@@ -22,7 +22,7 @@ MICROBENCH_DIR=$SCRIPT_DIR/../workloads/microbenchmark
 # change directory to parent directory
 cd "$SCRIPT_DIR/.."
 
-for source in Makefile fork_overhead.c tppt_huge_fork.c; do
+for source in Makefile fork_overhead.c tppt_huge_fork.c tppt_huge_shared.c; do
 	if [[ ! -f "$MICROBENCH_DIR/$source" ]]; then
 		echo "missing required microbenchmark source: $MICROBENCH_DIR/$source" >&2
 		exit 1
