@@ -62,7 +62,9 @@ for binary in unit_fork_overhead unit_tppt_huge_fork; do
 done
 
 # build redis
-chroot_run_as_user "cd /home/$USER/apps/redis && make && make bench_redis_st && cp bench_redis_st mosaictest"
+for redis_app in redis post-marker-redis; do
+    chroot_run_as_user "cd /home/$USER/apps/$redis_app && make && make bench_redis_st && cp bench_redis_st mosaictest"
+done
 
 # build shmem_matmul    
 chroot_run_as_user "cd /home/$USER/apps/shmem_matmu && make mem && cp mem mosaictest"
