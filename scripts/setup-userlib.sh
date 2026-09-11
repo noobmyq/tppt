@@ -55,11 +55,18 @@ POSTGRES_LIBS=(
 chroot_run apt-get update
 chroot_run apt-get install -y ${COMMON_LIBS[@]} ${REDIS_LIBS[@]} ${POSTGRES_LIBS[@]}
 
-# build microbenchmark
+# Build the reviewed microbenchmarks staged by setup-disk.sh.
 chroot_run_as_user "cd /home/$USER/microbenchmark && make clean && make"
-for binary in unit_fork_overhead unit_tppt_huge_fork; do
+for binary in unit_fork_overhead unit_tppt_huge_fork unit_tppt_huge_shared; do
     chroot_run test -x "/home/$USER/microbenchmark/$binary"
 done
+
+# Build the fixed-v2 helper from the staged Linux source and install the exact
+# binary used by both M14 shared-workload launchers.
+chroot_run_as_user "make -C /home/$USER/tppt-m14/linux/tools/testing/tppt clean all"
+chroot_run install -m 0755 \
+    "/home/$USER/tppt-m14/linux/tools/testing/tppt/tppt_shared_probe" \
+    /usr/local/bin/tppt_shared_probe
 
 # build redis
 for redis_app in redis post-marker-redis; do
@@ -71,6 +78,31 @@ chroot_run_as_user "cd /home/$USER/apps/shmem_matmu && make mem && cp mem mosaic
 
 # build postgres
 chroot_run_as_user "cd /home/$USER/apps/postgres && ./build.sh && ./simple-init.sh"
+
+# Preserve the original installation and dataset. Build the opt-in M14 copy in
+# its separate path; prepare.sh verifies the original source manifest itself.
+if chroot_run test -e "/home/$USER/apps/postgres-m14"; then
+    echo "refusing to overwrite existing PostgreSQL M14 stage" >&2
+    exit 1
+fi
+chroot_run_as_user \
+    "/home/$USER/tppt-m14/postgres/prepare.sh --source /home/$USER/apps/postgres --stage /home/$USER/apps/postgres-m14"
+chroot_run test -x "/home/$USER/apps/postgres-m14/build_dir/bin/postgres"
+chroot_run test -x "/home/$USER/apps/postgres-m14/build_dir/bin/mosaictest"
+
+# Keep a guest-local binding for the later host manifest. This records the
+# exact staged sources and binaries without claiming runtime evidence.
+chroot_run /bin/bash -c "sha256sum \
+    /home/$USER/microbenchmark/tppt_huge_shared.c \
+    /home/$USER/microbenchmark/unit_tppt_huge_shared \
+    /home/$USER/tppt-m14/linux/tools/testing/tppt/tppt_shared_probe.c \
+    /home/$USER/tppt-m14/linux/include/linux/tppt_shmem_probe.h \
+    /usr/local/bin/tppt_shared_probe \
+    /home/$USER/tppt-m14/postgres/prepare.sh \
+    /home/$USER/tppt-m14/postgres/tppt-m14-postgres.patch \
+    /home/$USER/apps/postgres-m14/build_dir/bin/postgres \
+    > /home/$USER/tppt-m14/artifacts.sha256"
+chroot_run chown "$USER:$USER" "/home/$USER/tppt-m14/artifacts.sha256"
 
 
 # then we build the OSv apps (for memory calculation)

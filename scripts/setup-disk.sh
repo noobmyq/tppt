@@ -19,8 +19,15 @@ SCRIPT_DIR=$(dirname -- "$(readlink -f -- "$0")")
 APP_DIR=$SCRIPT_DIR/../workloads/qemu-dynamorio-workload/linux-workload
 MEM_APP_DIR=$SCRIPT_DIR/../workloads/qemu-dynamorio-workload/osv-workload
 MICROBENCH_DIR=$SCRIPT_DIR/../workloads/microbenchmark
+M14_STAGE=$SCRIPT_DIR/stage-m14-validation.sh
 # change directory to parent directory
 cd "$SCRIPT_DIR/.."
+
+[[ -x $M14_STAGE ]] || {
+	echo "missing M14 validation staging helper: $M14_STAGE" >&2
+	exit 1
+}
+"$M14_STAGE" --check
 
 for source in Makefile fork_overhead.c tppt_huge_fork.c tppt_huge_shared.c; do
 	if [[ ! -f "$MICROBENCH_DIR/$source" ]]; then
@@ -28,6 +35,11 @@ for source in Makefile fork_overhead.c tppt_huge_fork.c tppt_huge_shared.c; do
 		exit 1
 	fi
 done
+
+if [[ ${TPPT_M14_PREFLIGHT_ONLY:-0} == 1 ]]; then
+	printf 'M14 validation staging preflight passed\n'
+	exit 0
+fi
 
 qemu-img create $DISK $SIZE
 
@@ -66,6 +78,10 @@ chroot_run mkdir -p /home/$USER/microbenchmark
 sudo cp -r $MICROBENCH_DIR/* $MNTPNT/home/$USER/microbenchmark
 sudo rm -f $MNTPNT/home/$USER/microbenchmark/unit_*
 chroot_run chown -R $USER:$USER /home/$USER/microbenchmark
+
+# Stage the reviewed M14 sources without modifying their repository copies.
+sudo "$M14_STAGE" --root "$MNTPNT" --user "$USER"
+chroot_run chown -R $USER:$USER /home/$USER/tppt-m14
 
 # # make sure /home/$USER/mem-apps exists
 chroot_run mkdir -p /home/$USER/mem-apps
