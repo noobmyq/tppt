@@ -23,9 +23,9 @@ cmp "$BASE_DIR/linux-tp/include/linux/tppt_shmem_probe.h" \
 	"$destination/linux/include/linux/tppt_shmem_probe.h"
 cmp "$BASE_DIR/workloads/m14-validation/postgres/prepare.sh" \
 	"$destination/postgres/prepare.sh"
-grep -qx 'linux=70d6878cabe77425814aca1a74614419421f1ea5' \
+grep -qx 'linux=dfb5d76c4671c31e355d198157e4f6023397159b' \
 	"$destination/repositories.txt"
-grep -qx 'qemu=1629b56c6d3e2b4f757563acd01ee4eba4714255' \
+grep -qx 'qemu=aa98de447b6725a62a0726d8b93a412123e8a43b' \
 	"$destination/repositories.txt"
 grep -qx 'workloads=565f976b00e21c6a2486f34104f8e92c3638fc03' \
 	"$destination/repositories.txt"
