@@ -23,7 +23,7 @@ cmp "$BASE_DIR/linux-tp/include/linux/tppt_shmem_probe.h" \
 	"$destination/linux/include/linux/tppt_shmem_probe.h"
 cmp "$BASE_DIR/workloads/m14-validation/postgres/prepare.sh" \
 	"$destination/postgres/prepare.sh"
-grep -qx 'linux=dfb5d76c4671c31e355d198157e4f6023397159b' \
+grep -qx 'linux=b83b369939cd2efc0ec64175988c48b4d08928cb' \
 	"$destination/repositories.txt"
 grep -qx 'qemu=aa98de447b6725a62a0726d8b93a412123e8a43b' \
 	"$destination/repositories.txt"
