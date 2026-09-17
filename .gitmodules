@@ -39,3 +39,7 @@
 	path = linux-tp
 	url = git@github.com:noobmyq/linux-tp.git
 	branch = main
+[submodule "hardware_quantization"]
+	path = hardware_quantization
+	url = git@github.com:noobmyq/decode_hw_quantization.git
+	branch = main
