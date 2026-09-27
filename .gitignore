@@ -5,3 +5,7 @@ data.bak
 disk.img
 *.code-workspace
 mount.point
+
+# Generated EMT baseline checkouts and out-of-tree builds.
+/emt-baselines/src/
+/emt-baselines/build/
