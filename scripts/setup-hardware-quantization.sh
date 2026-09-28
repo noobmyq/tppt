@@ -3,8 +3,7 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_dir=$(cd "$script_dir/.." && pwd)
-storage_dir=${STORAGE_DIR:-$(dirname "$repo_dir")}
-orfs_dir=${ORFS_DIR:-$storage_dir/OpenROAD-flow-scripts}
+orfs_dir=$(realpath -m -- "${ORFS_DIR:-$repo_dir/OpenROAD-flow-scripts}")
 jobs=${JOBS:-$(nproc)}
 
 if ((jobs > 30)); then
@@ -19,7 +18,7 @@ else
     git -C "$orfs_dir" submodule update --init --recursive
 fi
 
-sudo "$orfs_dir/setup.sh"
+(cd "$orfs_dir" && sudo ./setup.sh)
 "$orfs_dir/build_openroad.sh" --local --threads "$jobs"
 sudo apt-get install -y python3-matplotlib
 

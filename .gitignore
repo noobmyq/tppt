@@ -9,3 +9,6 @@ mount.point
 # Generated EMT baseline checkouts and out-of-tree builds.
 /emt-baselines/src/
 /emt-baselines/build/
+
+# Locally installed OpenROAD Flow Scripts toolchain.
+/OpenROAD-flow-scripts/
