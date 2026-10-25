@@ -28,6 +28,12 @@ for source in Makefile fork_overhead.c tppt_huge_fork.c tppt_huge_shared.c; do
 		exit 1
 	fi
 done
+for helper in setup-tcmalloc.sh build-thp-tcmalloc.sh build-bfs-tcmalloc.sh; do
+	if [[ ! -f "$SCRIPT_DIR/$helper" ]]; then
+		echo "missing required guest setup helper: $SCRIPT_DIR/$helper" >&2
+		exit 1
+	fi
+done
 qemu-img create $DISK $SIZE
 
 mkfs.ext4 -F $DISK
@@ -77,7 +83,7 @@ for dataset in snb-sf300:155pf8uyxBN6bLfVAinjpr11CIgvqAUn9 snb-sf1000:11q3SSQVcL
 	fi
 	archive=$(mktemp /tmp/tppt-graphbig.XXXXXX.zip)
 	trap 'rm -f -- "$archive"' EXIT
-	gdown "${dataset#*:}" --output "$archive"
+	~/.local/bin/gdown "${dataset#*:}" --output "$archive"
 	sudo mkdir -p "$GRAPHBIG_DIR/$name"
 	sudo unzip -o "$archive" -d "$GRAPHBIG_DIR/$name"
 	[[ -s $GRAPHBIG_DIR/$name/edge.csv && -s $GRAPHBIG_DIR/$name/vertex.csv ]]
@@ -89,6 +95,14 @@ chroot_run chown -R $USER:$USER /home/$USER/mem-apps
 # copy scripts
 sudo cp $SCRIPT_DIR/pte_control_conf/vmfiles/pte_stats_monitor.sh $MNTPNT/home/$USER/
 chroot_run chown $USER:$USER /home/$USER/pte_stats_monitor.sh
+
+# Stage the tool installer and workload builder for the normal userlib phase.
+sudo install -D -m 755 "$SCRIPT_DIR/setup-tcmalloc.sh" \
+    "$MNTPNT/usr/local/sbin/tppt-setup-tcmalloc"
+sudo install -D -m 755 "$SCRIPT_DIR/build-thp-tcmalloc.sh" \
+    "$MNTPNT/usr/local/sbin/tppt-build-thp-tcmalloc"
+sudo install -D -m 755 "$SCRIPT_DIR/build-bfs-tcmalloc.sh" \
+    "$MNTPNT/usr/local/sbin/tppt-build-bfs-tcmalloc"
 
 # inside mem-apps we need to build those apps as user $USER
 # TODO: build the apps inside the chroot as $USER

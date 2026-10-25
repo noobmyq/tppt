@@ -2,6 +2,19 @@
 
 set -euo pipefail
 
+TCMALLOC_ONLY=0
+TCMALLOC_BFS_ONLY=0
+case "${1:-}" in
+    "") ;;
+    --tcmalloc-only) TCMALLOC_ONLY=1 ;;
+    --tcmalloc-bfs-only) TCMALLOC_BFS_ONLY=1 ;;
+    *) echo "usage: $0 [--tcmalloc-only|--tcmalloc-bfs-only]" >&2; exit 2 ;;
+esac
+if (( $# > 1 )); then
+    echo "usage: $0 [--tcmalloc-only|--tcmalloc-bfs-only]" >&2
+    exit 2
+fi
+
 # make sure $MNTPNT is set
 : "${MNTPNT:?MNTPNT not set}"
 : "${USER:?USER not set}"
@@ -10,18 +23,36 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 BASE_DIR=$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)
 
 # make sure mntpnt is mounted
-if ! grep -qs "$MNTPNT" /proc/mounts; then
+if ! mountpoint -q -- "$MNTPNT"; then
     echo "$MNTPNT is not mounted. Please mount it before running this script."
     exit 1
 fi
 
 function chroot_run {
-	sudo chroot $MNTPNT "$@"
+	sudo chroot "$MNTPNT" "$@"
 }
 
 function chroot_run_as_user {
-    sudo chroot $MNTPNT /bin/su - $USER -c "$*"
+    sudo chroot "$MNTPNT" /bin/su - "$USER" -s /bin/bash -c "set -euo pipefail; $*"
 }
+
+# The normal setup path provisions LLVM/Bazel/Google TCMalloc here, then
+# builds all ten THP workloads in both variants below. Refresh staged helpers
+# so older mounted images also use the current implementation.
+sudo install -D -m 755 "$SCRIPT_DIR/setup-tcmalloc.sh" \
+    "$MNTPNT/usr/local/sbin/tppt-setup-tcmalloc"
+sudo install -D -m 755 "$SCRIPT_DIR/build-bfs-tcmalloc.sh" \
+    "$MNTPNT/usr/local/sbin/tppt-build-bfs-tcmalloc"
+sudo install -D -m 755 "$SCRIPT_DIR/build-thp-tcmalloc.sh" \
+    "$MNTPNT/usr/local/sbin/tppt-build-thp-tcmalloc"
+chroot_run /usr/local/sbin/tppt-setup-tcmalloc
+if (( TCMALLOC_ONLY )); then
+    exit 0
+fi
+if (( TCMALLOC_BFS_ONLY )); then
+    chroot_run /usr/local/sbin/tppt-build-bfs-tcmalloc "$USER"
+    exit 0
+fi
 
 # common libs
 COMMON_LIBS=(
@@ -83,6 +114,11 @@ chroot_run_as_user "cd /home/$USER/mem-apps/xsbench && rm xsbench && make module
 chroot_run_as_user "cd /home/$USER/mem-apps/graphbig/ && make module"
 # we for loop the bin in graphbig/bin/* and then copy them to has prefix mosaictest
 chroot_run_as_user "for bin in /home/$USER/mem-apps/graphbig/bin/*; do cp \"\$bin\" /home/$USER/mem-apps/graphbig/bin/mosaictest-\$(basename \"\$bin\"); done"
+
+# Default setup always installs all 20 binaries: original allocator source
+# for *_tcmalloc_2m, and the shift-23/cacheline patches for *_tcmalloc_8m.
+# Both variants must pass their build and smoke/linkage checks first.
+chroot_run /usr/local/sbin/tppt-build-thp-tcmalloc "$USER"
 
 sudo mkdir -p "$MNTPNT/home/$USER/thp_alloc_exp"
 sudo cp -r "$BASE_DIR/thp_alloc_exp/allocator_exp" "$MNTPNT/home/$USER/thp_alloc_exp/allocator_exp"

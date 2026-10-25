@@ -81,11 +81,19 @@ build_linux()
     local config="$2"
     local localversion="$3"
     local source_dir="${SRC_ROOT}/${name}"
-    local build_dir="${BUILD_ROOT}/${name}"
+    local build_dir="${BUILD_ROOT}/${4:-${name}}"
+    local fpt_mode="${5:-}"
 
-    printf 'Building %s...\n' "${name}"
+    printf 'Building %s...\n' "${4:-${name}}"
     mkdir -p -- "${build_dir}"
     cp -- "${source_dir}/${config}" "${build_dir}/.config"
+    if [[ -n "${fpt_mode}" ]]; then
+        "${source_dir}/scripts/config" --file "${build_dir}/.config" \
+            --disable X86_64_FPT_L3L2 --disable X86_64_FPT_L4L3 \
+            --disable X86_64_FPT_L4L3L2L1 --enable "${fpt_mode}" \
+            --enable TRANSPARENT_HUGEPAGE --enable TRANSPARENT_HUGEPAGE_ALWAYS \
+            --disable TRANSPARENT_HUGEPAGE_MADVISE
+    fi
     make -C "${source_dir}" O="${build_dir}" olddefconfig
     make -C "${source_dir}" O="${build_dir}" -j"${JOBS}" \
         LOCALVERSION="${localversion}"
@@ -138,7 +146,13 @@ build_qemu()
     cleanup_qemu_build_link
 }
 
-(( $# == 0 )) || die "this script does not accept arguments"
+if [[ $# == 1 && "$1" == --fpt-l4l3-thp-only ]]; then
+    checkout_source linux-fpt "${EMT_LINUX_URL}" FPT "${EMT_LINUX_FPT_COMMIT}"
+    build_linux linux-fpt configs/general_interface_FPT_config -gen-FPT-L4L3-THP \
+        linux-fpt-l4l3-thp X86_64_FPT_L4L3
+    exit 0
+fi
+(( $# == 0 )) || die "usage: $0 [--fpt-l4l3-thp-only]"
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v make >/dev/null 2>&1 || die "make is required"
 mkdir -p -- "${SRC_ROOT}" "${BUILD_ROOT}"
@@ -153,6 +167,8 @@ checkout_source qemu-fpt "${QEMU_EMT_URL}" execlog_addr_dump "${QEMU_EMT_COMMIT}
 build_linux linux-radix configs/general_interface_radix_config -gen-x86
 build_linux linux-ecpt configs/general_interface_ECPT_config -gen-ECPT
 build_linux linux-fpt configs/general_interface_FPT_config -gen-FPT-L4L3L2L1
+build_linux linux-fpt configs/general_interface_FPT_config -gen-FPT-L4L3-THP \
+    linux-fpt-l4l3-thp X86_64_FPT_L4L3
 
 build_qemu qemu-radix configs/targets/x86_64_radix-softmmu.mak \
     -Wno-unused-function
