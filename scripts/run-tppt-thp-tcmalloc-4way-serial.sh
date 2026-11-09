@@ -1,37 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ten fresh TCMalloc workloads: serialize captures and overlap them with
-# analysis. Four workers allow at most eight concurrent simulations. Retire
-# a trace only after both default and mmu_to_l2 validate.
+# A bounded capture producer overlaps four analysis workers (eight simulations).
+# Completed default/mmu_to_l2 pairs are reused, including historical results
+# whose capture logs are no longer available. Retire traces only after both
+# analyses validate. No locks: coordinate competing capture drivers explicitly.
 readonly ROOT=${TPPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly QEMU_ROOT=${ROOT}/qemu-linux
 readonly DYNAMORIO_ROOT=${ROOT}/tp-emt-dynamorio
 readonly EMT_ROOT=${ROOT}/emt-baselines/build
 # Flatten L4+L3 only so FPT retains normal PMD huge-page leaves.
 readonly FPT_KERNEL_DIR=${EMT_ROOT}/linux-fpt-l4l3-thp
+readonly VANILLA_KERNEL_DIR=${TPPT_VANILLA_LINUX_FOLDER:-${ROOT}/linux-6.8}
 readonly TRACE_ROOT=${TPPT_TRACE_ROOT:-${QEMU_ROOT}/results_thp_tcmalloc_4way}
 readonly RESULT_ROOT=${TPPT_RESULT_ROOT:-${DYNAMORIO_ROOT}/results/linux_thp_tcmalloc_4way}
 readonly NUM_INST=${TPPT_NUM_INST:-1000000000}
-readonly WORK_DIR=${TPPT_WORK_DIR:-/tmp/tppt-thp-tcmalloc-4way}
-readonly WORKLOADS=(gups xsbench btree dc dfs tc bfs cc pr sssp)
+readonly DISK_IMAGE=${DISK_IMAGE:-${ROOT}/disk.img}
 readonly MODES=(tp vanilla fpt ecpt)
 readonly MAX_WORKERS=4
+readonly MAX_QEMU=${TPPT_MAX_QEMU:-1}
+readonly MIN_AVAILABLE_GIB=${TPPT_QEMU_MIN_AVAILABLE_GIB:-0}
 
 [[ ${NUM_INST} =~ ^[1-9][0-9]*$ ]] || {
     echo "TPPT_NUM_INST must be a positive integer" >&2
     exit 2
 }
-
-exec 9>"${TPPT_DRIVER_LOCK:-/tmp/tppt-thp-tcmalloc-4way-serial.lock}"
-flock -n 9 || {
-    echo "Another TCMalloc THP four-way driver is running" >&2
-    exit 1
+[[ ${MAX_QEMU} =~ ^[1-9][0-9]*$ && ${MIN_AVAILABLE_GIB} =~ ^(0|[1-9][0-9]*)$ ]] || {
+    echo "TPPT_MAX_QEMU must be positive; TPPT_QEMU_MIN_AVAILABLE_GIB must be nonnegative" >&2
+    exit 2
 }
 
-for path in \
+dry_run=false
+case $#:$* in
+    0:) ;;
+    1:--dry-run) dry_run=true ;;
+    *) echo "Usage: $0 [--dry-run]" >&2; exit 2 ;;
+esac
+
+for path in "${DISK_IMAGE}" \
     "${ROOT}/linux-tp/arch/x86/boot/bzImage" \
-    "${ROOT}/linux-6.8/arch/x86/boot/bzImage" \
+    "${VANILLA_KERNEL_DIR}/arch/x86/boot/bzImage" \
     "${QEMU_ROOT}/build/qemu-system-x86_64" \
     "${QEMU_ROOT}/build/contrib/plugins/libdynamorio.so" \
     "${DYNAMORIO_ROOT}/build_linux/bin64/drrun" \
@@ -43,7 +51,7 @@ for path in \
     "${EMT_ROOT}/qemu-ecpt/tests/plugin/libexeclog.so"; do
     [[ -s ${path} ]] || { echo "Missing build artifact: ${path}" >&2; exit 1; }
 done
-grep -q '^CONFIG_TRANSPARENT_HUGEPAGE=y$' "${ROOT}/linux-6.8/.config" || {
+grep -q '^CONFIG_TRANSPARENT_HUGEPAGE=y$' "${VANILLA_KERNEL_DIR}/.config" || {
     echo "Vanilla Linux 6.8 lacks THP support" >&2
     exit 1
 }
@@ -69,15 +77,14 @@ fi
     exit 1
 }
 
-mkdir -p "${TRACE_ROOT}/logs" "${WORK_DIR}"
-for config in default mmu_to_l2; do
-    for mode in "${MODES[@]}"; do
-        mkdir -p "${RESULT_ROOT}/${config}/${mode}"
-    done
-done
-source "${QEMU_ROOT}/run_linux_thp_tcmalloc_command.sh"
+source "${QEMU_ROOT}/run_linux_thp_command.sh"
+# Associative-array iteration is unordered; use a stable workload order.
+mapfile -t WORKLOADS < <(printf '%s\n' "${!linux_thp_workloads[@]}" | LC_ALL=C sort)
+readonly WORKLOADS
 
 active_pids=()
+capture_pids=()
+declare -A capture_workloads=() capture_modes=()
 current_capture_pid=
 
 cleanup()
@@ -93,7 +100,7 @@ cleanup()
         done
         kill -TERM -- "${current_capture_pid}" 2>/dev/null || true
     fi
-    for pid in "${active_pids[@]}"; do
+    for pid in "${active_pids[@]}" "${capture_pids[@]}"; do
         for child in $(pgrep -P "${pid}" || true) "${pid}"; do
             pgid=$(ps -o pgid= -p "${child}" 2>/dev/null | tr -d ' ' || true)
             if [[ -n ${pgid} && ${pgid} != "${own_pgid}" ]]; then
@@ -110,11 +117,40 @@ trap cleanup EXIT
 analysis_complete()
 {
     local output=$1
-    [[ -s ${output} ]] &&
-        grep -q '^num_requests :' "${output}" &&
-        grep -q '^~~~~~~ detailed perf stats ~~~~~~' "${output}" &&
-        grep -A4 '^user memory references:' "${output}" |
-            grep -q "^16,${NUM_INST}$"
+    [[ -s ${output} ]] || return 1
+    awk -v budget="${NUM_INST}" '
+        /^num_requests[[:space:]]*:/ { if ($NF + 0 > 0) requests = 1 }
+        /^~~~~~~ detailed perf stats ~~~~~~/ { perf = 1 }
+        /^user memory references:/ { user_line = NR }
+        user_line && NR > user_line && NR <= user_line + 4 {
+            sub(/\r$/, "")
+            if ($0 == "16," budget) instructions = 1
+        }
+        END { exit !(requests && perf && instructions) }
+    ' "${output}"
+}
+
+capture_resources_busy()
+{
+    python3 - "${MAX_QEMU}" "${MIN_AVAILABLE_GIB}" <<'PY'
+from pathlib import Path
+import os
+import sys
+count = 0
+for proc in Path('/proc').iterdir():
+    if not proc.name.isdigit():
+        continue
+    try:
+        argv0 = (proc / 'cmdline').read_bytes().split(b'\0', 1)[0]
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        continue
+    if os.path.basename(argv0).startswith(b'qemu-system-'):
+        count += 1
+available_kib = int(next(line.split()[1] for line in
+    Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:')))
+busy = count >= int(sys.argv[1]) or available_kib < int(sys.argv[2]) * 1024**2
+raise SystemExit(0 if busy else 1)
+PY
 }
 
 trace_mode()
@@ -130,7 +166,6 @@ capture_trace()
 {
     local workload=$1 mode=$2 trace=$3
     local stem console command kernel rc partial
-    local capture_lock
     local -a env_args
 
     stem=$(basename "${trace}" .bin)
@@ -149,6 +184,10 @@ capture_trace()
         echo "Empty or incomplete trace exists: ${trace}" >&2
         return 1
     }
+    [[ ! -e ${console} ]] || {
+        echo "Capture log exists without a reusable trace; inspect: ${console}" >&2
+        return 1
+    }
 
     if [[ ${mode} == tp ]]; then
         command=${linux_thp_workloads[${workload}]}
@@ -161,7 +200,7 @@ capture_trace()
         return 1
     }
     env_args=(QEMU_MEMORY=200G TPPT_WORKLOAD_PLUGIN_MODE=logAll
-        "DISK_IMAGE=${ROOT}/disk.img"
+        "DISK_IMAGE=${DISK_IMAGE}"
         "QEMU_BIN=${QEMU_ROOT}/build/qemu-system-x86_64"
         "TPPT_WORKLOAD_PLUGIN=${QEMU_ROOT}/build/contrib/plugins/libdynamorio.so"
         TPPT_KERNEL_DEBUG=fork TPPT_POOL_MB= TPPT_POOL_BASE_PFN= TPPT_BIN_COUNT=
@@ -176,7 +215,7 @@ capture_trace()
                 TPPT_BIN_COUNT=329728 TRANSPARENT_HUGEPAGE_MODE=never)
             ;;
         vanilla)
-            kernel="${ROOT}/linux-6.8"
+            kernel="${VANILLA_KERNEL_DIR}"
             env_args+=("TPPT_KERNEL_FILE=${kernel}/arch/x86/boot/bzImage"
                 QEMU_TRACE_FORMAT=tppt TPPT_THP_MODE=
                 TRANSPARENT_HUGEPAGE_MODE=always)
@@ -198,16 +237,15 @@ capture_trace()
     esac
 
     echo "Capturing ${workload}/${mode}: ${trace}"
-    exec {capture_lock}>/tmp/tppt-mem-4way-qemu.lock
-    flock "${capture_lock}"
+    while capture_resources_busy; do
+        echo "Waiting for a QEMU slot (limit ${MAX_QEMU}) and ${MIN_AVAILABLE_GIB} GiB available before ${workload}/${mode}"
+        sleep 15
+    done
     setsid --wait env "${env_args[@]}" "${QEMU_ROOT}/run-qemu-linux.sh" \
-        "${kernel}" "${command}" "${partial}" "${NUM_INST}" \
-        >"${WORK_DIR}/launcher_${stem}.log" 2>&1 9>&- &
+        "${kernel}" "${command}" "${partial}" "${NUM_INST}" 2>&1 &
     current_capture_pid=$!
     if wait "${current_capture_pid}"; then rc=0; else rc=$?; fi
     current_capture_pid=
-    flock -u "${capture_lock}"
-    exec {capture_lock}>&-
 
     [[ -s ${partial} ]] &&
         grep -Eq "Reached[[:space:]]+${NUM_INST} user instrs" "${console}" &&
@@ -303,10 +341,11 @@ process_trace()
     # Each worker owns its capture and analysis process groups. A failure in
     # another worker reaches this trap and stops these descendants as well.
     active_pids=()
+    capture_pids=()
     current_capture_pid=
     trap 'exit 130' INT TERM
     trap cleanup EXIT
-    source "${QEMU_ROOT}/run_linux_thp_tcmalloc_command.sh"
+    source "${QEMU_ROOT}/run_linux_thp_command.sh"
 
     mode_name=$(trace_mode "${mode}")
     trace="${TRACE_ROOT}/${workload}_${mode_name}_${NUM_INST}.bin"
@@ -318,8 +357,7 @@ process_trace()
         capture_trace "${workload}" "${mode}" "${trace}"
         for config in default mmu_to_l2; do
             setsid --wait bash -euo pipefail -c 'analyze_trace "$@"' _ \
-                "${workload}" "${mode}" "${trace}" "${config}" \
-                >"${WORK_DIR}/simulator_${workload}_${mode}_${config}.log" 2>&1 9>&- &
+                "${workload}" "${mode}" "${trace}" "${config}" 2>&1 &
             active_pids+=("$!")
         done
         while (( ${#active_pids[@]} > 0 )); do
@@ -335,26 +373,120 @@ process_trace()
     fi
 }
 
-export ROOT QEMU_ROOT EMT_ROOT FPT_KERNEL_DIR DYNAMORIO_ROOT
-export TRACE_ROOT RESULT_ROOT WORK_DIR NUM_INST
-export -f analyze_trace analysis_complete capture_trace trace_mode cleanup
-export -f process_trace wait_for_worker
+# Reap a finished capture and immediately hand it to the analysis consumers.
+wait_for_capture()
+{
+    local pid state finished_pid= workload mode
+    local -a remaining=()
+    while [[ -z ${finished_pid} ]]; do
+        for pid in "${capture_pids[@]}"; do
+            state=$(ps -o stat= -p "${pid}" 2>/dev/null || true)
+            if [[ -n ${state} && ${state} != Z* ]]; then
+                continue
+            fi
+            if ! wait "${pid}"; then
+                echo "Capture failed; retained unfinished traces" >&2
+                return 1
+            fi
+            finished_pid=${pid}
+            break
+        done
+        [[ -n ${finished_pid} ]] || sleep 1
+    done
+    workload=${capture_workloads[${finished_pid}]}
+    mode=${capture_modes[${finished_pid}]}
+    for pid in "${capture_pids[@]}"; do
+        [[ ${pid} == "${finished_pid}" ]] || remaining+=("${pid}")
+    done
+    capture_pids=("${remaining[@]}")
+    unset 'capture_workloads['"${finished_pid}"']' 'capture_modes['"${finished_pid}"']'
+    while (( ${#active_pids[@]} >= MAX_WORKERS )); do
+        wait_for_worker
+    done
+    setsid --wait bash -euo pipefail -c 'process_trace "$@"' _ \
+        "${workload}" "${mode}" &
+    active_pids+=("$!")
+}
 
-# Keep four workload/model workers in flight, matching the regular-page
-# four-way driver's concurrency. Its capture lock permits only one QEMU;
-# completed captures can simulate while another worker captures the next.
+export ROOT QEMU_ROOT EMT_ROOT FPT_KERNEL_DIR VANILLA_KERNEL_DIR DYNAMORIO_ROOT
+export TRACE_ROOT RESULT_ROOT NUM_INST DISK_IMAGE
+export MAX_QEMU MIN_AVAILABLE_GIB
+export -f analyze_trace analysis_complete capture_trace trace_mode cleanup
+export -f process_trace wait_for_worker capture_resources_busy
+
+# Validate the full plan before any capture or output directory creation.
+skipped=0
+pending=0
 for workload in "${WORKLOADS[@]}"; do
     for mode in "${MODES[@]}"; do
-        while (( ${#active_pids[@]} >= MAX_WORKERS )); do
-            wait_for_worker
+        complete=true
+        for config in default mmu_to_l2; do
+            output="${RESULT_ROOT}/${config}/${mode}/${workload}.txt"
+            if ! analysis_complete "${output}"; then
+                [[ ! -e ${output} ]] || {
+                    echo "Invalid final output; will not overwrite: ${output}" >&2
+                    exit 1
+                }
+                complete=false
+            fi
         done
-        setsid --wait bash -euo pipefail -c 'process_trace "$@"' _ \
-            "${workload}" "${mode}" 9>&- &
-        active_pids+=("$!")
+        if ${complete}; then
+            echo "SKIP ${workload}/${mode}: both analyses validated"
+            skipped=$((skipped + 1))
+        else
+            echo "PENDING ${workload}/${mode}"
+            pending=$((pending + 1))
+        fi
+    done
+done
+echo "Plan: ${skipped} completed pairs skipped; ${pending} pairs pending"
+echo "Capture admission: fewer than ${MAX_QEMU} QEMUs; at least ${MIN_AVAILABLE_GIB} GiB available"
+echo "Captures: ${TRACE_ROOT}; simulations: ${RESULT_ROOT}; disk: ${DISK_IMAGE}"
+${dry_run} && exit 0
+
+mkdir -p "${TRACE_ROOT}/logs"
+for config in default mmu_to_l2; do
+    for mode in "${MODES[@]}"; do
+        mkdir -p "${RESULT_ROOT}/${config}/${mode}"
+    done
+done
+
+# The producer reserves capture slots before spawning, so even launchers that
+# have not reached exec(QEMU) count against the limit. Finish a workload's
+# captures before advancing to the next; analyses can continue in parallel.
+for workload in "${WORKLOADS[@]}"; do
+    for mode in "${MODES[@]}"; do
+        if analysis_complete "${RESULT_ROOT}/default/${mode}/${workload}.txt" &&
+           analysis_complete "${RESULT_ROOT}/mmu_to_l2/${mode}/${workload}.txt"; then
+            continue
+        fi
+        while (( ${#capture_pids[@]} >= MAX_QEMU )) || capture_resources_busy; do
+            if (( ${#capture_pids[@]} > 0 )); then
+                wait_for_capture
+            else
+                echo "Waiting for a capture slot and ${MIN_AVAILABLE_GIB} GiB available"
+                sleep 15
+            fi
+        done
+        trace="${TRACE_ROOT}/${workload}_$(trace_mode "${mode}")_${NUM_INST}.bin"
+        setsid --wait bash -euo pipefail -c '
+            active_pids=(); capture_pids=(); current_capture_pid=
+            trap "exit 130" INT TERM
+            trap cleanup EXIT
+            source "${QEMU_ROOT}/run_linux_thp_command.sh"
+            capture_trace "$@"
+        ' _ "${workload}" "${mode}" "${trace}" &
+        pid=$!
+        capture_pids+=("${pid}")
+        capture_workloads[${pid}]=${workload}
+        capture_modes[${pid}]=${mode}
+    done
+    while (( ${#capture_pids[@]} > 0 )); do
+        wait_for_capture
     done
 done
 while (( ${#active_pids[@]} > 0 )); do
     wait_for_worker
 done
 
-echo "All 40 TCMalloc THP captures and 80 default/mmu_to_l2 simulations completed"
+echo "All ${#WORKLOADS[@]} TCMalloc THP workloads complete in four modes and both simulation configurations"

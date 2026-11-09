@@ -9,20 +9,20 @@ if (( EUID != 0 )); then
     exit 1
 fi
 if (( $# < 1 )) || [[ ! $1 =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
-    echo "usage: $0 <workload-user> [xsbench gups btree dc pr bfs dfs sssp tc cc]" >&2
+    echo "usage: $0 <workload-user> [xsbench gups btree canneal memcached dc pr bfs dfs sssp tc cc]" >&2
     exit 2
 fi
 WORKLOAD_USER=$1
 shift
 workloads=("$@")
 if (( ${#workloads[@]} == 0 )); then
-    workloads=(xsbench gups btree dc pr bfs dfs sssp tc cc)
+    workloads=(xsbench gups btree canneal memcached dc pr bfs dfs sssp tc cc)
 fi
 declare -A selected=()
 graph_selected=0
 for name in "${workloads[@]}"; do
     case "$name" in
-        xsbench|gups|btree) ;;
+        xsbench|gups|btree|canneal|memcached) ;;
         dc|pr|bfs|dfs|sssp|tc|cc) graph_selected=1 ;;
         *) echo "Unknown workload: $name" >&2; exit 2 ;;
     esac
@@ -143,6 +143,27 @@ for name in "${workloads[@]}"; do
                 -o "$BUILD_DIR/$name/btree.o"
             destinations[$name]="$MEM_APP_DIR/btree"
             ;;
+        canneal)
+            # Match the serial Makefile build; preserve the benchmark and markers.
+            for source in annealer_thread rng netlist main netlist_elem; do
+                g++ -msse3 -O3 -c "$MEM_APP_DIR/canneal/$source.cpp" \
+                    -o "$BUILD_DIR/$name/$source.o"
+            done
+            destinations[$name]="$MEM_APP_DIR/canneal"
+            ;;
+        memcached)
+            # Build the same standalone benchmark objects as mosaictest, then
+            # let Bazel link them against each matching TCMalloc variant.
+            (
+                cd "$MEM_APP_DIR/memcached-osv"
+                ./configure LDFLAGS="-static"
+                make clean
+                make -j4 module
+            )
+            cp "$MEM_APP_DIR/memcached-osv"/memcached-*.o "$BUILD_DIR/$name/"
+            cp /usr/lib/x86_64-linux-gnu/libevent.a "$BUILD_DIR/$name/"
+            destinations[$name]="$MEM_APP_DIR/memcached-osv"
+            ;;
         *)
             case "$name" in
                 dc) source=bench_degreeCentr/dc ;;
@@ -174,7 +195,7 @@ build = Path(sys.argv[1])
 text = '''load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 '''
-if any(n not in ("xsbench", "gups", "btree") for n in sys.argv[2:]):
+if any(n not in ("xsbench", "gups", "btree", "canneal", "memcached") for n in sys.argv[2:]):
     text += '''cc_library(name = "pfm", srcs = ["libpfm.a"])
 cc_library(name = "pfm_cxx", srcs = ["libpfm_cxx.a"], deps = [":pfm"])
 '''
@@ -183,7 +204,16 @@ for name in sys.argv[2:]:
     objects = [f"{name}/{n}.o" for n in
                ("Main", "io", "Simulation", "CalculateXS", "GridInit", "XSutils", "Materials")
                ] if name == "xsbench" else [f"{name}/{name}.o"]
-    deps = [] if name in ("xsbench", "gups", "btree") else [":pfm_cxx"]
+    if name == "canneal":
+        objects = [f"canneal/{n}.o" for n in
+                   ("annealer_thread", "rng", "netlist", "main", "netlist_elem")]
+    if name == "memcached":
+        objects = sorted(str(p.relative_to(build)) for p in
+                         (build / name).glob("memcached-*.o"))
+        if not objects:
+            raise SystemExit("No memcached benchmark objects built")
+        objects += ["memcached/libevent.a"]
+    deps = [] if name in ("xsbench", "gups", "btree", "canneal", "memcached") else [":pfm_cxx"]
     text += '''cc_binary(
     name = %s,
     srcs = %s,

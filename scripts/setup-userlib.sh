@@ -114,6 +114,8 @@ chroot_run_as_user "cd /home/$USER/mem-apps/xsbench && rm xsbench && make module
 chroot_run_as_user "cd /home/$USER/mem-apps/graphbig/ && make module"
 # we for loop the bin in graphbig/bin/* and then copy them to has prefix mosaictest
 chroot_run_as_user "for bin in /home/$USER/mem-apps/graphbig/bin/*; do cp \"\$bin\" /home/$USER/mem-apps/graphbig/bin/mosaictest-\$(basename \"\$bin\"); done"
+# Rebuild the multiprocess binaries from the staged guest sources.
+chroot_run_as_user "make -B -C /home/$USER/mem-apps/graphbig/multiprocess STATIC=1"
 
 # Default setup always installs all 20 binaries: original allocator source
 # for *_tcmalloc_2m, and the shift-23/cacheline patches for *_tcmalloc_8m.

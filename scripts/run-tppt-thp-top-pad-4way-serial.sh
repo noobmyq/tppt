@@ -67,7 +67,7 @@ fi
     exit 1
 }
 
-mkdir -p "${TRACE_ROOT}/logs" "${RESULT_ROOT}" /tmp/tppt-thp-top-pad-4way
+mkdir -p "${TRACE_ROOT}/logs" "${RESULT_ROOT}"
 for mode in "${MODES[@]}"; do
     mkdir -p "${RESULT_ROOT}/${mode}"
 done
@@ -187,8 +187,7 @@ capture_trace()
     exec {capture_lock}>/tmp/tppt-mem-4way-qemu.lock
     flock "${capture_lock}"
     setsid --wait env "${env_args[@]}" "${QEMU_ROOT}/run-qemu-linux.sh" \
-        "${kernel}" "${command}" "${trace}" "${NUM_INST}" \
-        >"/tmp/tppt-thp-top-pad-4way/launcher_${stem}.log" 2>&1 9>&- &
+        "${kernel}" "${command}" "${trace}" "${NUM_INST}" 2>&1 9>&- &
     current_capture_pid=$!
     if wait "${current_capture_pid}"; then rc=0; else rc=$?; fi
     current_capture_pid=
@@ -245,8 +244,7 @@ start_analysis()
     setsid --wait bash -c 'cd "$1"; shift; exec ./run_common.sh "$@"' _ \
         "${DYNAMORIO_ROOT}" "${trace}" "${partial}" "${skip}" false \
         "${DYNAMORIO_ROOT}/build_linux/bin64/drrun" false "${format}" \
-        "${arch}" -1 \
-        >"/tmp/tppt-thp-top-pad-4way/simulator_${workload}_${mode}.log" 2>&1 9>&- &
+        "${arch}" -1 2>&1 9>&- &
     active_pids+=("$!")
     active_traces+=("${trace}")
     active_outputs+=("${output}")
@@ -270,9 +268,7 @@ while (( ${#active_pids[@]} > 0 )); do
     finish_oldest_analysis
 done
 
-MPLCONFIGDIR=/tmp/tppt-thp-top-pad-4way/matplotlib \
-PYTHONPYCACHEPREFIX=/tmp/tppt-thp-top-pad-4way/pycache \
-python3 "${PLOT_ROOT}/plot.py" \
+python3 -B "${PLOT_ROOT}/plot.py" \
     --csv-mode write \
     --base-dir "${RESULT_ROOT}/vanilla" \
     --tp-dir "${RESULT_ROOT}/tp" \

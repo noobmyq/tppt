@@ -1,0 +1,75 @@
+Subject: [PATCH] mm: fix FPT folded fork iteration and fault-around lifetime
+Base-commit: 61d3e2553d43f3befca503f92d338a8c0a9379ca
+
+The CONFIG_ENHANCED_INTERFACE filemap_map_pages() points vmf->tentry at
+its stack-local iterator. If fault-around maps neighboring pages but
+returns zero, do_read_fault() continues into finish_fault() with that
+expired pointer. Stack reuse can turn it into an arbitrary PTE address.
+
+A two-worker GraphBIG BFS on a five-vertex graph reproduced this while
+reading a MAP_SHARED | MAP_ANONYMOUS arena: insert_tentry() overwrote an
+init_mm kernel PUD, and the later switch to init_mm double-faulted.
+
+Restore the caller's tentry and PTE pointers on every return path, after
+releasing the iterator's PTE mapping/lock. Keep fault-around and the FPT
+page-table geometry unchanged. This patch is applied only to linux-fpt.
+
+The fault-around fix was validated with the two-worker process probe and
+BFS, CC, and SSSP five-vertex preflight on both L4L3L2L1 and L4L3-THP
+kernels, with THP disabled. Both completed correctly and shut down cleanly.
+
+With L2/L1 folding, the iterator's PMD and PUD pointers alias. At a
+1 GiB boundary, tentry_iter_n_next() advances PMD alone and leaves PUD
+behind. Copying into an empty child entry then installs a PTE table at
+PUD level without the folded flag, corrupting the child's page tables.
+
+Skip the aliased PMD level and advance through PUD so read_tentry()
+rebuilds the pointers at the new address. The combined patch was rebuilt
+and tested on both L4L3L2L1 and L4L3-THP kernels, with THP disabled.
+Diskless tests passed for two 4 KiB pages across a 1 GiB boundary, dense
+64 MiB mappings, sparse 3/9 GiB mappings, and mappings with discarded
+pages. Children preserved all expected data and both kernels shut down
+cleanly.
+
+diff --git a/arch/x86/mm/fpt.c b/arch/x86/mm/fpt.c
+index be77aaffe853d9add096cf9b025a7208af024e6c..34a1a011a63313ea6a0bd3023caa6a4057a82f3a 100644
+--- a/arch/x86/mm/fpt.c
++++ b/arch/x86/mm/fpt.c
+@@ -706,6 +706,14 @@ int tentry_iter_n_next(tentry_iter_t * iter, pgtable_level pg_lv, int n_step)
+ 
+ 	for (; pg_lv <= PG_LEVEL_PGD; pg_lv++) {
+ 		uint64_t parent_page_size = 0;
++		/* A folded PMD aliases its PUD; advance through the PUD instead. */
++		if (pg_lv == PG_LEVEL_PMD &&
++		    iter->tentry.ptep[PG_LEVEL_PMD] &&
++		    iter->tentry.ptep[PG_LEVEL_PMD] ==
++			    iter->tentry.ptep[PG_LEVEL_PUD]) {
++			iter->tentry.ptep[PG_LEVEL_PMD] = NULL;
++			continue;
++		}
+ 		parent_page_size = get_parent_page_size(iter->mm, &iter->tentry, pg_lv);
+ 
+ 		boundary = get_boundary(iter->addr, parent_page_size);
+diff --git a/mm/filemap.c b/mm/filemap.c
+index d534cc91a981abc2b7e0f4525576e0f853850c7e..a813a4053c0dcaf16ee56a7dd1c67a2cf01cd681 100644
+--- a/mm/filemap.c
++++ b/mm/filemap.c
+@@ -3432,6 +3432,8 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
+ 			     pgoff_t start_pgoff, pgoff_t end_pgoff)
+ {
+ 	struct vm_area_struct *vma = vmf->vma;
++	tentry_t *saved_tentry = vmf->tentry;
++	pte_t *saved_pte = vmf->pte;
+ 	struct file *file = vma->vm_file;
+ 	struct address_space *mapping = file->f_mapping;
+ 	pgoff_t last_pgoff = start_pgoff;
+@@ -3523,6 +3525,9 @@ unlock:
+ 	} while ((head = next_map_page(mapping, &xas, end_pgoff)) != NULL);
+ 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+ out:
++	/* Fault completion must not retain the stack-local iter.tentry. */
++	vmf->tentry = saved_tentry;
++	vmf->pte = saved_pte;
+ 	rcu_read_unlock();
+ 	WRITE_ONCE(file->f_ra.mmap_miss, mmap_miss);
+ 	return ret;
