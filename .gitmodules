@@ -43,3 +43,9 @@
 	path = hardware_quantization
 	url = git@github.com:noobmyq/decode_hw_quantization.git
 	branch = main
+[submodule "alloc-bench"]
+	path = alloc-bench
+	url = git@github.com:noobmyq/tppt-native-alloc-bench.git
+[submodule "linux-tp-native-alloc"]
+	path = linux-tp-native-alloc
+	url = git@github.com:noobmyq/linux-tp
