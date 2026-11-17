@@ -2,14 +2,22 @@
 
 set -euo pipefail
 
-readonly QEMU_ROOT=/mnt/storage/tppt/qemu-linux
-readonly TP_LINUX=/mnt/storage/tppt/linux-tp
-readonly VANILLA_LINUX=/mnt/storage/tppt/linux-6.8
-readonly EMT_ROOT=/mnt/storage/tppt/emt-baselines/build
-readonly DYNAMORIO_ROOT=/mnt/storage/tppt/tp-emt-dynamorio
+readonly ROOT=${TPPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+readonly QEMU_ROOT=${ROOT}/qemu-linux
+readonly TP_LINUX=${ROOT}/linux-tp
+readonly VANILLA_LINUX=${ROOT}/linux-6.8
+readonly EMT_ROOT=${ROOT}/emt-baselines/build
+readonly DYNAMORIO_ROOT=${ROOT}/tp-emt-dynamorio
 readonly TRACE_ROOT=${QEMU_ROOT}/results_tppt_emt_mem_4k_1b
 readonly RESULT_ROOT=${DYNAMORIO_ROOT}/results/tppt_emt_mem_4k_1b
 readonly NUM_INST=1000000000
+readonly MAX_QEMU=${TPPT_MAX_QEMU:-1}
+readonly SIM_JOBS=${TPPT_SIM_JOBS:-12}
+[[ ${MAX_QEMU} =~ ^[1-9][0-9]*$ && ${SIM_JOBS} =~ ^[1-9][0-9]*$ ]] &&
+    (( SIM_JOBS >= 2 )) || {
+    echo "TPPT_MAX_QEMU must be positive; TPPT_SIM_JOBS must be at least 2" >&2
+    exit 2
+}
 
 exec 9>/tmp/tppt-mem-4way-serial.lock
 flock -n 9 || {
@@ -44,29 +52,22 @@ capture_trace()
     local vanilla_command=$4
     local trace=$5
     local rc
-    local capture_lock
+    local console="${TRACE_ROOT}/logs/qemu_${workload}_${mode}_${NUM_INST}.log"
+    local partial="${trace%.log}.partial"
 
     if [[ -s "${trace}" ]]; then
+        capture_complete "${console}" || {
+            echo "Existing trace has no complete capture log: ${trace}" >&2
+            return 1
+        }
         echo "Reusing existing trace: ${trace}"
         return 0
     fi
 
-    # Mode workers for one workload run concurrently, but QEMU capture is
-    # globally serialized. Recheck after taking the lock in case another
-    # worker completed the same target while this worker waited.
-    exec {capture_lock}>/tmp/tppt-mem-4way-qemu.lock
-    flock "${capture_lock}"
-
-    if [[ -s "${trace}" ]]; then
-        echo "Reusing trace captured while waiting: ${trace}"
-        flock -u "${capture_lock}"
-        return 0
-    fi
-
-    if [[ -e "${trace}" ]]; then
-        echo "Removing empty trace before recapture: ${trace}"
-        rm -- "${trace}"
-    fi
+    [[ ! -e ${trace} && ! -e ${partial} ]] || {
+        echo "Incomplete trace exists; inspect before retrying: ${trace}" >&2
+        return 1
+    }
 
     echo "Capturing ${workload}/${mode}: ${trace}"
 
@@ -81,7 +82,7 @@ capture_trace()
             TPPT_WORKLOAD_PLUGIN_MODE=logAll \
             QEMU_MEMORY=128G \
             "${QEMU_ROOT}/run-qemu-linux.sh" \
-                "${TP_LINUX}" "${tp_command}" "${trace}" "${NUM_INST}"
+                "${TP_LINUX}" "${tp_command}" "${partial}" "${NUM_INST}"
         rc=$?
         ;;
     vanilla)
@@ -93,7 +94,7 @@ capture_trace()
             TPPT_WORKLOAD_PLUGIN_MODE=logAll \
             QEMU_MEMORY=128G \
             "${QEMU_ROOT}/run-qemu-linux.sh" \
-                "${VANILLA_LINUX}" "${vanilla_command}" "${trace}" "${NUM_INST}"
+                "${VANILLA_LINUX}" "${vanilla_command}" "${partial}" "${NUM_INST}"
         rc=$?
         ;;
     fpt|ecpt)
@@ -106,7 +107,7 @@ capture_trace()
             TPPT_KERNEL_FILE="${EMT_ROOT}/linux-${mode}/arch/x86/boot/bzImage" \
             TPPT_WORKLOAD_PLUGIN="${EMT_ROOT}/qemu-${mode}/tests/plugin/libexeclog.so" \
             "${QEMU_ROOT}/run-qemu-linux.sh" \
-                "${EMT_ROOT}/linux-${mode}" "${vanilla_command}" "${trace}" "${NUM_INST}"
+                "${EMT_ROOT}/linux-${mode}" "${vanilla_command}" "${partial}" "${NUM_INST}"
         rc=$?
         ;;
     *)
@@ -117,13 +118,21 @@ capture_trace()
     set -e
 
     if (( rc != 0 )); then
-        echo "QEMU returned ${rc} for ${workload}/${mode}; validating the trace through the simulator"
+        echo "QEMU returned ${rc} for ${workload}/${mode}; checking capture completion"
     fi
-    [[ -s "${trace}" ]] || {
-        echo "Capture produced no trace for ${workload}/${mode}" >&2
-        exit 1
+    [[ -s "${partial}" ]] && capture_complete "${console}" || {
+        echo "Incomplete capture for ${workload}/${mode}; retaining partial and console" >&2
+        return 1
     }
-    flock -u "${capture_lock}"
+    mv -- "${partial}" "${trace}"
+}
+
+capture_complete()
+{
+    [[ -s $1 ]] &&
+        ! grep -Eq 'Kernel panic|Oops:|Assertion .* failed' "$1" &&
+        grep -Eq "Reached[[:space:]]+${NUM_INST} user instrs|Total simulated ${NUM_INST} user instrs" "$1" &&
+        grep -q 'Closed binary log file descriptor' "$1"
 }
 
 analysis_complete()
@@ -213,12 +222,10 @@ analyze_trace()
     mv -- "${partial}" "${output}"
 }
 
-process_mode()
+analyze_mode()
 {
     local workload=$1
     local mode=$2
-    local tp_command=$3
-    local vanilla_command=$4
     local trace="${TRACE_ROOT}/${workload}_${mode}_${NUM_INST}.log"
     local default_output="${RESULT_ROOT}/default/${mode}/${workload}.txt"
     local l2_output="${RESULT_ROOT}/mmu_to_l2/${mode}/${workload}.txt"
@@ -236,8 +243,6 @@ process_mode()
         fi
         return 0
     fi
-
-    capture_trace "${workload}" "${mode}" "${tp_command}" "${vanilla_command}" "${trace}"
 
     analyze_trace "${workload}" "${mode}" "${trace}" default &
     default_pid=$!
@@ -262,30 +267,81 @@ process_mode()
     echo "Removed analyzed binary trace (${trace_size} bytes): ${trace}"
 }
 
-for workload in "${workloads[@]}"; do
-    tp_command=${linux_mem_workloads[${workload}]}
-    vanilla_command=$(without_tppt_exec "${tp_command}")
-    mode_pids=()
-    mode_names=()
-    workload_failed=0
+# Capture slots are released as soon as QEMU exits. Simulation pairs have their
+# own limit, so neither a slow simulation nor a workload boundary blocks capture.
+pending=()
+ready=()
+declare -A captures=() simulations=()
+failed=0
+export QEMU_ROOT TP_LINUX VANILLA_LINUX EMT_ROOT DYNAMORIO_ROOT TRACE_ROOT RESULT_ROOT NUM_INST
+export -f capture_trace capture_complete analyze_trace analyze_mode analysis_complete
 
-    echo "Starting workload: ${workload}"
-
-    for mode in "${modes[@]}"; do
-        process_mode "${workload}" "${mode}" "${tp_command}" "${vanilla_command}" &
-        mode_pids+=("$!")
-        mode_names+=("${mode}")
+cleanup()
+{
+    local pid
+    for pid in "${!captures[@]}" "${!simulations[@]}"; do
+        kill -TERM -- "-${pid}" 2>/dev/null || true
     done
+    for pid in "${!captures[@]}" "${!simulations[@]}"; do
+        wait "${pid}" 2>/dev/null || true
+    done
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-    for index in "${!mode_pids[@]}"; do
-        if ! wait "${mode_pids[${index}]}"; then
-            echo "Mode failed for ${workload}/${mode_names[${index}]}" >&2
-            workload_failed=1
+for workload in "${workloads[@]}"; do
+    for mode in "${modes[@]}"; do
+        trace="${TRACE_ROOT}/${workload}_${mode}_${NUM_INST}.log"
+        if analysis_complete "${RESULT_ROOT}/default/${mode}/${workload}.txt" &&
+           analysis_complete "${RESULT_ROOT}/mmu_to_l2/${mode}/${workload}.txt"; then
+            echo "Both analyses already complete for ${workload}/${mode}"
+            rm -f -- "${trace}"
+        else
+            pending+=("${workload}/${mode}")
         fi
     done
-
-    (( workload_failed == 0 )) || exit 1
-    echo "Completed workload: ${workload}"
 done
+
+while (( ${#pending[@]} + ${#captures[@]} + ${#ready[@]} + ${#simulations[@]} > 0 )); do
+    for pid in "${!captures[@]}"; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            if wait "${pid}"; then
+                ready+=("${captures[${pid}]}")
+            else
+                echo "Capture failed: ${captures[${pid}]}" >&2
+                failed=1
+            fi
+            unset 'captures['"${pid}"']'
+        fi
+    done
+    for pid in "${!simulations[@]}"; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            if ! wait "${pid}"; then
+                echo "Analysis failed: ${simulations[${pid}]}" >&2
+                failed=1
+            fi
+            unset 'simulations['"${pid}"']'
+        fi
+    done
+    while (( ${#ready[@]} > 0 && 2 * (${#simulations[@]} + 1) <= SIM_JOBS )); do
+        job=${ready[0]}; ready=("${ready[@]:1}")
+        setsid --wait bash -euo pipefail -c 'analyze_mode "$@"' _ "${job%/*}" "${job#*/}" &
+        simulations[$!]=${job}
+    done
+    while (( ${#pending[@]} > 0 && ${#captures[@]} < MAX_QEMU )); do
+        job=${pending[0]}; pending=("${pending[@]:1}")
+        workload=${job%/*}; mode=${job#*/}
+        tp_command=${linux_mem_workloads[${workload}]}
+        vanilla_command=$(without_tppt_exec "${tp_command}")
+        trace="${TRACE_ROOT}/${workload}_${mode}_${NUM_INST}.log"
+        setsid --wait bash -euo pipefail -c 'capture_trace "$@"' _ \
+            "${workload}" "${mode}" "${tp_command}" "${vanilla_command}" "${trace}" &
+        captures[$!]=${job}
+    done
+    sleep 1
+done
+
+(( failed == 0 )) || exit 1
 
 echo "All TPPT/vanilla/FPT/ECPT memory workloads and both analysis configurations completed"

@@ -102,6 +102,7 @@ chroot_run_as_user "cd /home/$USER/apps/shmem_matmu && make mem && cp mem mosaic
 
 # build postgres
 chroot_run_as_user "cd /home/$USER/apps/postgres && ./build.sh && ./simple-init.sh"
+chroot_run_as_user "cd /home/$USER/apps/prepared-lookup-postgres && ./build.sh && ./simple-init.sh"
 
 # then we build the OSv apps (for memory calculation)
 chroot_run_as_user "cd /home/$USER/mem-apps/btree && make && cp BTree mosaictest"

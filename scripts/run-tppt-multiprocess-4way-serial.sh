@@ -135,15 +135,11 @@ classify()
     fi
 }
 
-# Pin the historical workload settings; the generic app command file differs.
+# Use the shared application commands for capture and resume.
 export TPPT_WORKLOAD_USER=${TPPT_WORKLOAD_USER:-myq}
 source "${QEMU_ROOT}/run_linux_command.sh"
 readonly WORKLOAD_USER
 [[ ${WORKLOAD_USER} =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid guest workload user"
-pg_prefix="cd /home/${WORKLOAD_USER}/apps/postgres/build_dir/bin; su ${WORKLOAD_USER} -c '"
-pg_args="./mosaictest --single -D /home/${WORKLOAD_USER}/apps/postgres/data postgres -c shared_memory_type=mmap -c shared_buffers=64GB -c huge_pages=off -a 1 -R 12000000'"
-linux_workloads_vanilla[postgres]="${pg_prefix}${pg_args}"
-linux_workloads_tp[postgres]="${pg_prefix}/usr/local/bin/tppt_exec ${pg_args}"
 linux_workloads_vanilla[post-marker-redis]="/home/${WORKLOAD_USER}/apps/post-marker-redis/mosaictest"
 linux_workloads_tp[post-marker-redis]="/usr/local/bin/tppt_exec ${linux_workloads_vanilla[post-marker-redis]}"
 
@@ -353,7 +349,10 @@ capture_trace()
                 env_args+=(QEMU_MEMORY=200G TPPT_POOL_MB=163840 TPPT_POOL_BASE_PFN=1048576 TPPT_BIN_COUNT=329728)
             fi
             ;;
-        vanilla) kernel=${ROOT}/linux-6.8 ;;
+        vanilla)
+            kernel=${ROOT}/linux-6.8
+            [[ ${workload} != postgres ]] || env_args+=(QEMU_MEMORY=200G)
+            ;;
         fpt|ecpt)
             kernel=${EMT_ROOT}/linux-${mode}
             env_args+=(QEMU_MEMORY=128G QEMU_TRACE_FORMAT=emt
