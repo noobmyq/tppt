@@ -86,9 +86,12 @@ POSTGRES_LIBS=(
 chroot_run apt-get update
 chroot_run apt-get install -y ${COMMON_LIBS[@]} ${REDIS_LIBS[@]} ${POSTGRES_LIBS[@]}
 
-# Build the reviewed microbenchmarks staged by setup-disk.sh.
+# Refresh sources so existing images also build the current microbenchmarks.
+sudo cp "$BASE_DIR/workloads/microbenchmark/Makefile" \
+    "$BASE_DIR/workloads/microbenchmark/"*.c "$MNTPNT/home/$USER/microbenchmark/"
+chroot_run chown -R "$USER:$USER" "/home/$USER/microbenchmark"
 chroot_run_as_user "cd /home/$USER/microbenchmark && make clean && make"
-for binary in unit_fork_overhead unit_tppt_huge_fork unit_tppt_huge_shared; do
+for binary in unit_fork_overhead unit_tppt_huge_fork unit_tppt_huge_shared unit_mixed_page_churn unit_thp_fragmentor; do
     chroot_run test -x "/home/$USER/microbenchmark/$binary"
 done
 
@@ -99,6 +102,9 @@ done
 
 # build shmem_matmul    
 chroot_run_as_user "cd /home/$USER/apps/shmem_matmu && make mem && cp mem mosaictest"
+
+# Shared anonymous memcached storage with forked readers.
+chroot_run_as_user "cd /home/$USER/apps/shared-mem-memcached && ./autogen.sh && ./configure --disable-docs LDFLAGS=\"-static\" && make -j4 memcached && cp memcached mosaictest"
 
 # build postgres
 chroot_run_as_user "cd /home/$USER/apps/postgres && ./build.sh && ./simple-init.sh"

@@ -6,18 +6,14 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # base dir is the parent directory of the script directory
 BASE_DIR=$(dirname "$SCRIPT_DIR")
 
-# shadow kernel folder
+# TPPT kernel config used as the vanilla baseline
 LINUX_TP_DIR="$BASE_DIR/linux-tp"
 
-pushd "$BASE_DIR"
-
-# # use all available cores up to 30
+# use all available cores up to 30
 NUM_CORES=$(nproc)
 if [ "$NUM_CORES" -gt 30 ]; then
     NUM_CORES=30
 fi
-make -j${NUM_CORES}
-popd
 
 # build vanilla Linux 6.8 for the new linux-tp/qemu-linux path
 if [ ! -d "$LINUX_TP_DIR" ]; then
@@ -25,7 +21,8 @@ if [ ! -d "$LINUX_TP_DIR" ]; then
     exit 1
 fi
 
-curl -O https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.8.tar.xz
+pushd "$BASE_DIR"
+curl -fLO https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.8.tar.xz
 tar xf linux-6.8.tar.xz
 rm linux-6.8.tar.xz
 
@@ -34,6 +31,9 @@ rm linux-6.8.tar.xz
 cp "$LINUX_TP_DIR/tppt_config" linux-6.8/.config
 
 pushd linux-6.8
+scripts/config --enable TRANSPARENT_HUGEPAGE \
+    --disable TRANSPARENT_HUGEPAGE_ALWAYS --enable TRANSPARENT_HUGEPAGE_MADVISE \
+    --disable TRANSPARENT_HUGEPAGE_NEVER
 make olddefconfig
 make -j${NUM_CORES}
 popd

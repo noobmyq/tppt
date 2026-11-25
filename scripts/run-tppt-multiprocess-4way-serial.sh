@@ -15,8 +15,6 @@ readonly GRAPHBIG_PAYLOAD=${TPPT_GRAPHBIG_PAYLOAD:-}
 readonly TP_KERNEL_FILE=${TPPT_TP_KERNEL_FILE:-${ROOT}/linux-tp/arch/x86/boot/bzImage}
 read -r -a MODES <<< "${TPPT_MODES:-tp vanilla fpt ecpt tp-fb}"
 readonly MODES
-read -r -a WORKLOADS <<< "${TPPT_WORKLOADS:-postgres post-marker-redis bfs_p2 cc_p2 sssp_p2}"
-readonly WORKLOADS
 
 dry_run=false
 case $#:$* in
@@ -77,12 +75,8 @@ analysis_complete()
 paths()
 {
     local workload=$1 mode=$2 trace_root result_root legacy
-    case ${workload} in
-        postgres|post-marker-redis|bfs_p2|cc_p2|sssp_p2)
-            trace_root=${QEMU_ROOT}/results_mp_4way
-            result_root=${DYNAMORIO_ROOT}/results/linux_mp_4way/default ;;
-        *) die "Unknown workload: ${workload}" ;;
-    esac
+    trace_root=${QEMU_ROOT}/results_mp_4way
+    result_root=${DYNAMORIO_ROOT}/results/linux_mp_4way/default
     trace="${trace_root}/${workload}_${mode}_${NUM_INST}.bin"
     legacy="${trace%.bin}.log"
     if exists "${legacy}"; then
@@ -140,8 +134,21 @@ export TPPT_WORKLOAD_USER=${TPPT_WORKLOAD_USER:-myq}
 source "${QEMU_ROOT}/run_linux_command.sh"
 readonly WORKLOAD_USER
 [[ ${WORKLOAD_USER} =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid guest workload user"
-linux_workloads_vanilla[post-marker-redis]="/home/${WORKLOAD_USER}/apps/post-marker-redis/mosaictest"
-linux_workloads_tp[post-marker-redis]="/usr/local/bin/tppt_exec ${linux_workloads_vanilla[post-marker-redis]}"
+if [[ -n ${TPPT_WORKLOADS:-} ]]; then
+    read -r -a WORKLOADS <<< "${TPPT_WORKLOADS}"
+else
+    mapfile -t WORKLOADS < <(printf '%s\n' "${!linux_workloads_vanilla[@]}" | LC_ALL=C sort)
+fi
+readonly WORKLOADS
+for workload in "${WORKLOADS[@]}"; do
+    [[ ${workload} =~ ^[a-zA-Z0-9_-]+$ ]] || die "Invalid workload name: ${workload}"
+    [[ -n ${linux_workloads_vanilla[${workload}]:-} ]] || die "Missing vanilla command: ${workload}"
+    for mode in "${MODES[@]}"; do
+        case ${mode} in
+            tp|tp-fb) [[ -n ${linux_workloads_tp[${workload}]:-} ]] || die "Missing TP command: ${workload}" ;;
+        esac
+    done
+done
 
 # Scan all selected combinations before mutating anything, including on resume.
 workloads=() modes=() actions=()
@@ -179,7 +186,7 @@ fi
 ${dry_run} && exit 0
 
 for index in "${!actions[@]}"; do
-    if [[ ${actions[index]} == CAPTURE && ${workloads[index]} == *_p2 && -n ${GRAPHBIG_PAYLOAD} ]]; then
+    if [[ ${actions[index]} == CAPTURE && ${workloads[index]} =~ ^(bfs|cc|sssp)_p2$ && -n ${GRAPHBIG_PAYLOAD} ]]; then
         [[ -s ${GRAPHBIG_PAYLOAD} && ${GRAPHBIG_PAYLOAD} = /* && ${GRAPHBIG_PAYLOAD} != *,* ]] || \
             die "Invalid TPPT_GRAPHBIG_PAYLOAD (expected an absolute ext4 image path)"
     fi
@@ -367,7 +374,7 @@ capture_trace()
     command="echo 1 > /proc/sys/vm/overcommit_memory; ${command}"
     if [[ ${workload} == *_p2 ]]; then
         command="{ test ! -e /sys/kernel/mm/transparent_hugepage/shmem_enabled || echo never > /sys/kernel/mm/transparent_hugepage/shmem_enabled; } && { ${command}; }"
-        if [[ -n ${GRAPHBIG_PAYLOAD} ]]; then
+        if [[ ${workload} =~ ^(bfs|cc|sssp)_p2$ && -n ${GRAPHBIG_PAYLOAD} ]]; then
             local guest_dir=/home/${WORKLOAD_USER}/mem-apps/graphbig/multiprocess
             env_args+=("QEMU_PAYLOAD_IMAGE=${GRAPHBIG_PAYLOAD}")
             command="mkdir -p ${guest_dir} && mount -t ext4 -o ro,noload /dev/sdb ${guest_dir} && cd ${guest_dir} && { ${command}; }"
@@ -396,9 +403,6 @@ capture_trace()
     capture_pid=
     [[ -s ${partial} ]] && capture_complete "${console}" "${mode}" || \
         die "Capture incomplete: ${workload}/${mode} (QEMU status ${rc}); retained partial/logs"
-    if [[ ${workload} == *_p2 ]]; then
-        grep -Fq '== 1193579 vertices  55656914 edges' "${console}" || die "Unexpected graph in ${console}"
-    fi
     # EMT can return nonzero after emitting its complete instruction budget.
     echo "CAPTURED ${workload}/${mode} (QEMU status ${rc})"
     mv -- "${partial}" "${trace}"

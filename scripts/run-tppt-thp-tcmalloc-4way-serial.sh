@@ -3,7 +3,7 @@ set -euo pipefail
 
 # A bounded capture producer overlaps four analysis workers (eight simulations).
 # Completed default/mmu_to_l2 pairs are reused, including historical results
-# whose capture logs are no longer available. Retire traces only after both
+# whose capture logs are no longer available. Retain traces after both
 # analyses validate. No locks: coordinate competing capture drivers explicitly.
 readonly ROOT=${TPPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly QEMU_ROOT=${ROOT}/qemu-linux
@@ -16,7 +16,20 @@ readonly TRACE_ROOT=${TPPT_TRACE_ROOT:-${QEMU_ROOT}/results_thp_tcmalloc_4way}
 readonly RESULT_ROOT=${TPPT_RESULT_ROOT:-${DYNAMORIO_ROOT}/results/linux_thp_tcmalloc_4way}
 readonly NUM_INST=${TPPT_NUM_INST:-1000000000}
 readonly DISK_IMAGE=${DISK_IMAGE:-${ROOT}/disk.img}
-readonly MODES=(tp vanilla fpt ecpt)
+read -r -a MODES <<< "${TPPT_MODES:-tp vanilla fpt ecpt}"
+readonly MODES
+seen_modes=' '
+for mode in "${MODES[@]}"; do
+    case ${mode} in
+        tp|tp-2MB|vanilla|fpt|ecpt) ;;
+        *) echo "Unknown TPPT_MODES entry: ${mode}" >&2; exit 2 ;;
+    esac
+    [[ ${seen_modes} != *" ${mode} "* ]] || {
+        echo "Duplicate TPPT_MODES entry: ${mode}" >&2; exit 2;
+    }
+    seen_modes+="${mode} "
+done
+(( ${#MODES[@]} > 0 )) || { echo 'TPPT_MODES is empty' >&2; exit 2; }
 readonly MAX_WORKERS=4
 readonly MAX_QEMU=${TPPT_MAX_QEMU:-1}
 readonly MIN_AVAILABLE_GIB=${TPPT_QEMU_MIN_AVAILABLE_GIB:-0}
@@ -127,7 +140,10 @@ analysis_complete()
             if ($0 == "16," budget) instructions = 1
         }
         END { exit !(requests && perf && instructions) }
-    ' "${output}"
+    ' "${output}" || return 1
+    if [[ ${output} == */tp-2MB/* ]]; then
+        grep -Fxq 'TPPT huge-mapping TLB entry size: 2097152 bytes' "${output}"
+    fi
 }
 
 capture_resources_busy()
@@ -157,6 +173,7 @@ trace_mode()
 {
     case $1 in
         tp) echo tppt-thp ;;
+        tp-2MB) echo tp-2MB ;;
         vanilla) echo vanilla-thp ;;
         fpt|ecpt) echo "$1" ;;
     esac
@@ -189,7 +206,7 @@ capture_trace()
         return 1
     }
 
-    if [[ ${mode} == tp ]]; then
+    if [[ ${mode} == tp || ${mode} == tp-2MB ]]; then
         command=${linux_thp_workloads[${workload}]}
     else
         command=${linux_thp_workloads_vanilla[${workload}]}
@@ -207,7 +224,7 @@ capture_trace()
         TPPT_THP_MODE=off QEMU_CPU=max,-la57,+invtsc)
 
     case ${mode} in
-        tp)
+        tp|tp-2MB)
             kernel="${ROOT}/linux-tp"
             env_args+=("TPPT_KERNEL_FILE=${kernel}/arch/x86/boot/bzImage"
                 QEMU_TRACE_FORMAT=tppt-thp TPPT_THP_MODE=on
@@ -277,6 +294,7 @@ analyze_trace()
     rm -f -- "${partial}"
     case ${mode} in
         tp) format=tppt-thp; arch=radix ;;
+        tp-2MB) format=tppt-thp; arch=radix; mode_flags=(-tppt_tlb_page_size 2M) ;;
         vanilla) format=tppt; arch=radix; mode_flags=(-skip_tiny_pointer_walk) ;;
         fpt) format=emt; arch=fpt; mode_flags=(-skip_tiny_pointer_walk) ;;
         ecpt) format=emt; arch=ecpt; mode_flags=(-cache_correct_only -skip_tiny_pointer_walk) ;;
@@ -336,7 +354,7 @@ wait_for_worker()
 process_trace()
 {
     local workload=$1 mode=$2
-    local mode_name trace default_output l2_output config trace_size
+    local mode_name trace default_output l2_output config
 
     # Each worker owns its capture and analysis process groups. A failure in
     # another worker reaches this trap and stops these descendants as well.
@@ -367,9 +385,7 @@ process_trace()
     analysis_complete "${default_output}"
     analysis_complete "${l2_output}"
     if [[ -e ${trace} ]]; then
-        trace_size=$(stat -c '%s' "${trace}")
-        rm -- "${trace}"
-        echo "Both analyses validated; removed trace (${trace_size} bytes): ${trace}"
+        echo "Both analyses validated; retained trace: ${trace}"
     fi
 }
 
@@ -442,6 +458,7 @@ done
 echo "Plan: ${skipped} completed pairs skipped; ${pending} pairs pending"
 echo "Capture admission: fewer than ${MAX_QEMU} QEMUs; at least ${MIN_AVAILABLE_GIB} GiB available"
 echo "Captures: ${TRACE_ROOT}; simulations: ${RESULT_ROOT}; disk: ${DISK_IMAGE}"
+echo "Modes: ${MODES[*]}; binary traces retained"
 ${dry_run} && exit 0
 
 mkdir -p "${TRACE_ROOT}/logs"
@@ -489,4 +506,4 @@ while (( ${#active_pids[@]} > 0 )); do
     wait_for_worker
 done
 
-echo "All ${#WORKLOADS[@]} TCMalloc THP workloads complete in four modes and both simulation configurations"
+echo "All ${#WORKLOADS[@]} TCMalloc THP workloads complete in ${#MODES[@]} modes and both simulation configurations"
