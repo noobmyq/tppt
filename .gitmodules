@@ -49,3 +49,4 @@
 [submodule "linux-tp-native-alloc"]
 	path = linux-tp-native-alloc
 	url = git@github.com:noobmyq/linux-tp
+	branch = tppt/native-alloc
