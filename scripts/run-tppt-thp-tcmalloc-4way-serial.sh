@@ -3,8 +3,9 @@ set -euo pipefail
 
 # A bounded capture producer overlaps four analysis workers (eight simulations).
 # Completed default/mmu_to_l2 pairs are reused, including historical results
-# whose capture logs are no longer available. Retain traces after both
-# analyses validate. No locks: coordinate competing capture drivers explicitly.
+# whose capture logs are no longer available. Each TP trace feeds both
+# 8 MiB and 2 MiB TLB simulations. Retain traces after all analyses validate.
+# No locks: coordinate competing capture drivers explicitly.
 readonly ROOT=${TPPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly QEMU_ROOT=${ROOT}/qemu-linux
 readonly DYNAMORIO_ROOT=${ROOT}/tp-emt-dynamorio
@@ -21,7 +22,7 @@ readonly MODES
 seen_modes=' '
 for mode in "${MODES[@]}"; do
     case ${mode} in
-        tp|tp-2MB|vanilla|fpt|ecpt) ;;
+        tp|vanilla|fpt|ecpt) ;;
         *) echo "Unknown TPPT_MODES entry: ${mode}" >&2; exit 2 ;;
     esac
     [[ ${seen_modes} != *" ${mode} "* ]] || {
@@ -173,7 +174,6 @@ trace_mode()
 {
     case $1 in
         tp) echo tppt-thp ;;
-        tp-2MB) echo tp-2MB ;;
         vanilla) echo vanilla-thp ;;
         fpt|ecpt) echo "$1" ;;
     esac
@@ -206,7 +206,7 @@ capture_trace()
         return 1
     }
 
-    if [[ ${mode} == tp || ${mode} == tp-2MB ]]; then
+    if [[ ${mode} == tp ]]; then
         command=${linux_thp_workloads[${workload}]}
     else
         command=${linux_thp_workloads_vanilla[${workload}]}
@@ -224,7 +224,7 @@ capture_trace()
         TPPT_THP_MODE=off QEMU_CPU=max,-la57,+invtsc)
 
     case ${mode} in
-        tp|tp-2MB)
+        tp)
             kernel="${ROOT}/linux-tp"
             env_args+=("TPPT_KERNEL_FILE=${kernel}/arch/x86/boot/bzImage"
                 QEMU_TRACE_FORMAT=tppt-thp TPPT_THP_MODE=on
@@ -293,7 +293,7 @@ analyze_trace()
     # An interrupted simulation can be retried from its retained trace.
     rm -f -- "${partial}"
     case ${mode} in
-        tp) format=tppt-thp; arch=radix ;;
+        tp) format=tppt-thp; arch=radix; mode_flags=(-tppt_tlb_page_size 8M) ;;
         tp-2MB) format=tppt-thp; arch=radix; mode_flags=(-tppt_tlb_page_size 2M) ;;
         vanilla) format=tppt; arch=radix; mode_flags=(-skip_tiny_pointer_walk) ;;
         fpt) format=emt; arch=fpt; mode_flags=(-skip_tiny_pointer_walk) ;;
@@ -351,10 +351,26 @@ wait_for_worker()
     active_pids=("${remaining_pids[@]}")
 }
 
+# Capture modes and simulator modes are different: TP has two TLB variants.
+simulation_modes()
+{
+    if [[ $1 == tp ]]; then printf '%s\n' tp tp-2MB; else echo "$1"; fi
+}
+
+analyses_complete()
+{
+    local workload=$1 mode=$2 simulation_mode config
+    for simulation_mode in $(simulation_modes "${mode}"); do
+        for config in default mmu_to_l2; do
+            analysis_complete "${RESULT_ROOT}/${config}/${simulation_mode}/${workload}.txt" || return 1
+        done
+    done
+}
+
 process_trace()
 {
     local workload=$1 mode=$2
-    local mode_name trace default_output l2_output config
+    local trace simulation_mode config
 
     # Each worker owns its capture and analysis process groups. A failure in
     # another worker reaches this trap and stops these descendants as well.
@@ -365,27 +381,24 @@ process_trace()
     trap cleanup EXIT
     source "${QEMU_ROOT}/run_linux_thp_command.sh"
 
-    mode_name=$(trace_mode "${mode}")
-    trace="${TRACE_ROOT}/${workload}_${mode_name}_${NUM_INST}.bin"
-    default_output="${RESULT_ROOT}/default/${mode}/${workload}.txt"
-    l2_output="${RESULT_ROOT}/mmu_to_l2/${mode}/${workload}.txt"
-    if analysis_complete "${default_output}" && analysis_complete "${l2_output}"; then
-        echo "Both analyses already complete for ${workload}/${mode}"
-    else
+    trace="${TRACE_ROOT}/${workload}_$(trace_mode "${mode}")_${NUM_INST}.bin"
+    if ! analyses_complete "${workload}" "${mode}"; then
         capture_trace "${workload}" "${mode}" "${trace}"
-        for config in default mmu_to_l2; do
-            setsid --wait bash -euo pipefail -c 'analyze_trace "$@"' _ \
-                "${workload}" "${mode}" "${trace}" "${config}" 2>&1 &
-            active_pids+=("$!")
-        done
-        while (( ${#active_pids[@]} > 0 )); do
-            wait_for_worker
+        # Two simulations per worker at a time, with one shared input trace.
+        for simulation_mode in $(simulation_modes "${mode}"); do
+            for config in default mmu_to_l2; do
+                setsid --wait bash -euo pipefail -c 'analyze_trace "$@"' _ \
+                    "${workload}" "${simulation_mode}" "${trace}" "${config}" 2>&1 &
+                active_pids+=("$!")
+            done
+            while (( ${#active_pids[@]} > 0 )); do
+                wait_for_worker
+            done
         done
     fi
-    analysis_complete "${default_output}"
-    analysis_complete "${l2_output}"
+    analyses_complete "${workload}" "${mode}"
     if [[ -e ${trace} ]]; then
-        echo "Both analyses validated; retained trace: ${trace}"
+        echo "All analyses validated; retained trace: ${trace}"
     fi
 }
 
@@ -428,7 +441,7 @@ export ROOT QEMU_ROOT EMT_ROOT FPT_KERNEL_DIR VANILLA_KERNEL_DIR DYNAMORIO_ROOT
 export TRACE_ROOT RESULT_ROOT NUM_INST DISK_IMAGE
 export MAX_QEMU MIN_AVAILABLE_GIB
 export -f analyze_trace analysis_complete capture_trace trace_mode cleanup
-export -f process_trace wait_for_worker capture_resources_busy
+export -f process_trace wait_for_worker capture_resources_busy simulation_modes analyses_complete
 
 # Validate the full plan before any capture or output directory creation.
 skipped=0
@@ -436,18 +449,20 @@ pending=0
 for workload in "${WORKLOADS[@]}"; do
     for mode in "${MODES[@]}"; do
         complete=true
-        for config in default mmu_to_l2; do
-            output="${RESULT_ROOT}/${config}/${mode}/${workload}.txt"
-            if ! analysis_complete "${output}"; then
-                [[ ! -e ${output} ]] || {
-                    echo "Invalid final output; will not overwrite: ${output}" >&2
-                    exit 1
-                }
-                complete=false
-            fi
+        for simulation_mode in $(simulation_modes "${mode}"); do
+            for config in default mmu_to_l2; do
+                output="${RESULT_ROOT}/${config}/${simulation_mode}/${workload}.txt"
+                if ! analysis_complete "${output}"; then
+                    [[ ! -e ${output} ]] || {
+                        echo "Invalid final output; will not overwrite: ${output}" >&2
+                        exit 1
+                    }
+                    complete=false
+                fi
+            done
         done
         if ${complete}; then
-            echo "SKIP ${workload}/${mode}: both analyses validated"
+            echo "SKIP ${workload}/${mode}: all analyses validated"
             skipped=$((skipped + 1))
         else
             echo "PENDING ${workload}/${mode}"
@@ -455,16 +470,19 @@ for workload in "${WORKLOADS[@]}"; do
         fi
     done
 done
-echo "Plan: ${skipped} completed pairs skipped; ${pending} pairs pending"
+echo "Plan: ${skipped} workload/mode groups skipped; ${pending} pending"
 echo "Capture admission: fewer than ${MAX_QEMU} QEMUs; at least ${MIN_AVAILABLE_GIB} GiB available"
 echo "Captures: ${TRACE_ROOT}; simulations: ${RESULT_ROOT}; disk: ${DISK_IMAGE}"
 echo "Modes: ${MODES[*]}; binary traces retained"
+echo "TP: one tppt-thp capture, tp (8 MiB) and tp-2MB (2 MiB) simulations"
 ${dry_run} && exit 0
 
 mkdir -p "${TRACE_ROOT}/logs"
 for config in default mmu_to_l2; do
     for mode in "${MODES[@]}"; do
-        mkdir -p "${RESULT_ROOT}/${config}/${mode}"
+        for simulation_mode in $(simulation_modes "${mode}"); do
+            mkdir -p "${RESULT_ROOT}/${config}/${simulation_mode}"
+        done
     done
 done
 
@@ -473,8 +491,18 @@ done
 # captures before advancing to the next; analyses can continue in parallel.
 for workload in "${WORKLOADS[@]}"; do
     for mode in "${MODES[@]}"; do
-        if analysis_complete "${RESULT_ROOT}/default/${mode}/${workload}.txt" &&
-           analysis_complete "${RESULT_ROOT}/mmu_to_l2/${mode}/${workload}.txt"; then
+        if analyses_complete "${workload}" "${mode}"; then
+            continue
+        fi
+        trace="${TRACE_ROOT}/${workload}_$(trace_mode "${mode}")_${NUM_INST}.bin"
+        # Retained traces need no QEMU slot; simulations overlap live captures.
+        if [[ -s ${trace} ]]; then
+            while (( ${#active_pids[@]} >= MAX_WORKERS )); do
+                wait_for_worker
+            done
+            setsid --wait bash -euo pipefail -c 'process_trace "$@"' _ \
+                "${workload}" "${mode}" &
+            active_pids+=("$!")
             continue
         fi
         while (( ${#capture_pids[@]} >= MAX_QEMU )) || capture_resources_busy; do
@@ -485,7 +513,6 @@ for workload in "${WORKLOADS[@]}"; do
                 sleep 15
             fi
         done
-        trace="${TRACE_ROOT}/${workload}_$(trace_mode "${mode}")_${NUM_INST}.bin"
         setsid --wait bash -euo pipefail -c '
             active_pids=(); capture_pids=(); current_capture_pid=
             trap "exit 130" INT TERM
