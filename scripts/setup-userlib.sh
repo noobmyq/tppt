@@ -4,14 +4,16 @@ set -euo pipefail
 
 TCMALLOC_ONLY=0
 TCMALLOC_BFS_ONLY=0
+SHMEM_REDIS_ONLY=0
 case "${1:-}" in
     "") ;;
     --tcmalloc-only) TCMALLOC_ONLY=1 ;;
     --tcmalloc-bfs-only) TCMALLOC_BFS_ONLY=1 ;;
-    *) echo "usage: $0 [--tcmalloc-only|--tcmalloc-bfs-only]" >&2; exit 2 ;;
+    --shmem-redis-only) SHMEM_REDIS_ONLY=1 ;;
+    *) echo "usage: $0 [--tcmalloc-only|--tcmalloc-bfs-only|--shmem-redis-only]" >&2; exit 2 ;;
 esac
 if (( $# > 1 )); then
-    echo "usage: $0 [--tcmalloc-only|--tcmalloc-bfs-only]" >&2
+    echo "usage: $0 [--tcmalloc-only|--tcmalloc-bfs-only|--shmem-redis-only]" >&2
     exit 2
 fi
 
@@ -35,6 +37,20 @@ function chroot_run {
 function chroot_run_as_user {
     sudo chroot "$MNTPNT" /bin/su - "$USER" -s /bin/bash -c "set -euo pipefail; $*"
 }
+
+build_shmem_redis() {
+    local source_dir="$BASE_DIR/workloads/qemu-dynamorio-workload/linux-workload/shmem_redis"
+    local guest_dir="/home/$USER/apps/shmem_redis"
+    chroot_run install -d -o "$USER" -g "$USER" "$guest_dir"
+    sudo cp -R -- "$source_dir/." "$MNTPNT$guest_dir/"
+    chroot_run chown -R "$USER:$USER" "$guest_dir"
+    chroot_run_as_user "cd '$guest_dir' && make clean && make bench_redis_st MALLOC=libc REDIS_CFLAGS=-DREDIS_SHMEM=16 CFLAGS='-O2 -march=x86-64 -mno-avx' && install -m 755 bench_redis_st mosaictest.next && mv -f mosaictest.next mosaictest"
+}
+
+if (( SHMEM_REDIS_ONLY )); then
+    build_shmem_redis
+    exit 0
+fi
 
 # The normal setup path provisions LLVM/Bazel/Google TCMalloc here, then
 # builds all ten THP workloads in both variants below. Refresh staged helpers
@@ -73,6 +89,7 @@ COMMON_LIBS=(
 # redis libs
 REDIS_LIBS=(
     libreadline-dev
+    libnuma-dev
 )
 
 # postgres libs
@@ -99,6 +116,7 @@ done
 for redis_app in redis post-marker-redis; do
     chroot_run_as_user "cd /home/$USER/apps/$redis_app && make && make bench_redis_st && cp bench_redis_st mosaictest"
 done
+build_shmem_redis
 
 # build shmem_matmul    
 chroot_run_as_user "cd /home/$USER/apps/shmem_matmu && make mem && cp mem mosaictest"

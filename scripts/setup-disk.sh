@@ -22,6 +22,10 @@ MICROBENCH_DIR=$SCRIPT_DIR/../workloads/microbenchmark
 # change directory to parent directory
 cd "$SCRIPT_DIR/.."
 
+if [[ ! -f "$APP_DIR/shmem_redis/Makefile" ]]; then
+	echo "missing shared-memory Redis source: $APP_DIR/shmem_redis" >&2
+	exit 1
+fi
 for source in Makefile fork_overhead.c tppt_huge_fork.c tppt_huge_shared.c mixed_page_churn.c thp_fragmentor.c; do
 	if [[ ! -f "$MICROBENCH_DIR/$source" ]]; then
 		echo "missing required microbenchmark source: $MICROBENCH_DIR/$source" >&2

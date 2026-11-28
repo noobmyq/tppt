@@ -16,6 +16,9 @@ readonly EMT_LINUX_FPT_COMMIT="61d3e2553d43f3befca503f92d338a8c0a9379ca"
 readonly QEMU_EMT_URL="https://github.com/xlab-uiuc/qemu-emt.git"
 readonly QEMU_EMT_COMMIT="a417c4ea5cf87a9cce3a95a9e0ddd8feafb4435a"
 readonly FPT_PATCH="${SCRIPT_DIR}/patches/emt-fpt-memory-fixes.patch"
+readonly FPT_THP_PATCH="${SCRIPT_DIR}/patches/emt-fpt-l3l2-khugepaged.patch"
+readonly FPT_THP_FAULT_PATCH="${SCRIPT_DIR}/patches/emt-fpt-l3l2-thp-fault.patch"
+readonly QEMU_ASID_PATCH="${SCRIPT_DIR}/patches/emt-qemu-address-space-ids.patch"
 
 active_qemu_source=""
 active_qemu_build_link=""
@@ -45,15 +48,41 @@ cleanup_qemu_build_link()
 
 trap 'restore_qemu_target; cleanup_qemu_build_link' EXIT
 
+applied_patch_prefix()
+(
+    local destination="$1"
+    local temporary_dir source_patch
+    local applied=0
+    shift
+
+    temporary_dir="$(mktemp -d)" || return 1
+    trap 'rm -f -- "${temporary_dir}/index"; rmdir -- "${temporary_dir}"' EXIT
+    export GIT_INDEX_FILE="${temporary_dir}/index"
+
+    # Reconstruct each prefix in a temporary index so patches can share files.
+    git -C "${destination}" read-tree HEAD || return 1
+    for source_patch in "$@"; do
+        git -C "${destination}" apply --cached "${source_patch}" || return 1
+        (( applied += 1 ))
+        if git -C "${destination}" diff --quiet --no-ext-diff; then
+            printf '%s\n' "${applied}"
+            return 0
+        fi
+    done
+    return 1
+)
+
 checkout_source()
 {
     local name="$1"
     local url="$2"
     local branch="$3"
     local commit="$4"
-    local source_patch="${5:-}"
     local destination="${SRC_ROOT}/${name}"
-    local status
+    local status source_patch
+    local applied=0
+    shift 4
+    local -a patches=("$@")
 
     if [[ ! -e "${destination}" ]]; then
         printf 'Cloning %s...\n' "${name}"
@@ -67,33 +96,28 @@ checkout_source()
         die "${destination} has an unexpected origin"
     status="$(git -C "${destination}" status --porcelain --untracked-files=all)"
     if [[ -n "${status}" ]]; then
-        # Accept exactly our saved patch, never unrelated edits or staged files.
-        if [[ -n "${source_patch}" &&
-              "$(git -C "${destination}" rev-parse HEAD)" == "${commit}" &&
-              -z "$(git -C "${destination}" ls-files --others --exclude-standard)" ]] &&
-            git -C "${destination}" diff --cached --quiet &&
-            cmp -s <(git -C "${destination}" diff --no-ext-diff --no-textconv --no-color \
-                --binary --full-index --src-prefix=a/ --dst-prefix=b/ --unified=3) \
-                <(sed -n '/^diff --git /,$p' "${source_patch}"); then
-            printf '%s already has %s applied.\n' "${name}" "${source_patch##*/}"
-            return
+        [[ "$(git -C "${destination}" rev-parse HEAD)" == "${commit}" &&
+           -z "$(git -C "${destination}" ls-files --others --exclude-standard)" ]] &&
+            git -C "${destination}" diff --cached --quiet ||
+            die "${destination} is dirty beyond the expected setup patches"
+        applied="$(applied_patch_prefix "${destination}" "${patches[@]}")" ||
+            die "${destination} is dirty beyond the expected setup patches"
+    else
+        if ! git -C "${destination}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
+            git -C "${destination}" fetch --depth=1 origin "${commit}"
         fi
-        die "${destination} is dirty beyond the expected setup patch"
+        if [[ "$(git -C "${destination}" rev-parse HEAD)" != "${commit}" ]] || \
+            git -C "${destination}" symbolic-ref --quiet HEAD >/dev/null; then
+            git -C "${destination}" checkout --detach "${commit}"
+        fi
     fi
 
-    if ! git -C "${destination}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
-        git -C "${destination}" fetch --depth=1 origin "${commit}"
-    fi
-
-    if [[ "$(git -C "${destination}" rev-parse HEAD)" != "${commit}" ]] || \
-        git -C "${destination}" symbolic-ref --quiet HEAD >/dev/null; then
-        git -C "${destination}" checkout --detach "${commit}"
-    fi
-
-    if [[ -n "${source_patch}" ]]; then
-        printf 'Applying %s to %s...\n' "${source_patch##*/}" "${name}"
-        git -C "${destination}" apply --check "${source_patch}"
-        git -C "${destination}" apply "${source_patch}"
+    if (( applied < ${#patches[@]} )); then
+        for source_patch in "${patches[@]:applied}"; do
+            printf 'Applying %s to %s...\n' "${source_patch##*/}" "${name}"
+        done
+        git -C "${destination}" apply --check "${patches[@]:applied}"
+        git -C "${destination}" apply "${patches[@]:applied}"
     fi
 }
 
@@ -168,29 +192,35 @@ build_qemu()
     cleanup_qemu_build_link
 }
 
-if [[ $# == 1 && "$1" == --fpt-l4l3-thp-only ]]; then
-    checkout_source linux-fpt "${EMT_LINUX_URL}" FPT "${EMT_LINUX_FPT_COMMIT}" "${FPT_PATCH}"
-    build_linux linux-fpt configs/general_interface_FPT_config -gen-FPT-L4L3-THP \
-        linux-fpt-l4l3-thp X86_64_FPT_L4L3
+build_fpt_thp()
+{
+    build_linux linux-fpt configs/general_interface_FPT_config -gen-FPT-L3L2-THP \
+        linux-fpt-l3l2-thp X86_64_FPT_L3L2
+}
+
+if [[ $# == 1 && "$1" == --fpt-l3l2-thp-only ]]; then
+    checkout_source linux-fpt "${EMT_LINUX_URL}" FPT "${EMT_LINUX_FPT_COMMIT}" \
+        "${FPT_PATCH}" "${FPT_THP_PATCH}" "${FPT_THP_FAULT_PATCH}"
+    build_fpt_thp
     exit 0
 fi
-(( $# == 0 )) || die "usage: $0 [--fpt-l4l3-thp-only]"
+(( $# == 0 )) || die "usage: $0 [--fpt-l3l2-thp-only]"
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v make >/dev/null 2>&1 || die "make is required"
 mkdir -p -- "${SRC_ROOT}" "${BUILD_ROOT}"
 
 checkout_source linux-radix "${EMT_LINUX_URL}" main "${EMT_LINUX_MAIN_COMMIT}"
 checkout_source linux-ecpt "${EMT_LINUX_URL}" main "${EMT_LINUX_MAIN_COMMIT}"
-checkout_source linux-fpt "${EMT_LINUX_URL}" FPT "${EMT_LINUX_FPT_COMMIT}" "${FPT_PATCH}"
+checkout_source linux-fpt "${EMT_LINUX_URL}" FPT "${EMT_LINUX_FPT_COMMIT}" \
+    "${FPT_PATCH}" "${FPT_THP_PATCH}" "${FPT_THP_FAULT_PATCH}"
 checkout_source qemu-radix "${QEMU_EMT_URL}" execlog_addr_dump "${QEMU_EMT_COMMIT}"
-checkout_source qemu-ecpt "${QEMU_EMT_URL}" execlog_addr_dump "${QEMU_EMT_COMMIT}"
-checkout_source qemu-fpt "${QEMU_EMT_URL}" execlog_addr_dump "${QEMU_EMT_COMMIT}"
+checkout_source qemu-ecpt "${QEMU_EMT_URL}" execlog_addr_dump "${QEMU_EMT_COMMIT}" "${QEMU_ASID_PATCH}"
+checkout_source qemu-fpt "${QEMU_EMT_URL}" execlog_addr_dump "${QEMU_EMT_COMMIT}" "${QEMU_ASID_PATCH}"
 
 build_linux linux-radix configs/general_interface_radix_config -gen-x86
 build_linux linux-ecpt configs/general_interface_ECPT_config -gen-ECPT
 build_linux linux-fpt configs/general_interface_FPT_config -gen-FPT-L4L3L2L1
-build_linux linux-fpt configs/general_interface_FPT_config -gen-FPT-L4L3-THP \
-    linux-fpt-l4l3-thp X86_64_FPT_L4L3
+build_fpt_thp
 
 build_qemu qemu-radix configs/targets/x86_64_radix-softmmu.mak \
     -Wno-unused-function

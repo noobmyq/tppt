@@ -7,6 +7,8 @@ readonly ROOT=${TPPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly QEMU_ROOT=${ROOT}/qemu-linux
 readonly DYNAMORIO_ROOT=${ROOT}/tp-emt-dynamorio
 readonly EMT_ROOT=${ROOT}/emt-baselines/build
+readonly TRACE_ROOT=$(realpath -m -- "${TPPT_MP_TRACE_ROOT:-${QEMU_ROOT}/results_mp_4way}")
+readonly RESULT_ROOT=$(realpath -m -- "${TPPT_MP_RESULT_ROOT:-${DYNAMORIO_ROOT}/results/linux_mp_4way/default}")
 readonly NUM_INST=1000000000
 readonly SIM_JOBS=${TPPT_SIM_JOBS:-12}
 readonly MAX_QEMU=${TPPT_MAX_QEMU:-1}
@@ -25,6 +27,7 @@ esac
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 exists() { [[ -e $1 || -L $1 ]]; }
+emt_asid_trace() { cmp -s -n 8 <(printf EMTASID1) "$1"; }
 [[ ${SIM_JOBS} =~ ^[1-9][0-9]*$ ]] || die "TPPT_SIM_JOBS must be a positive integer"
 [[ ${MAX_QEMU} =~ ^[1-9][0-9]*$ && ${MIN_AVAILABLE_GIB} =~ ^[0-9]+$ ]] || die "Invalid QEMU admission settings"
 for mode in "${MODES[@]}"; do
@@ -74,18 +77,16 @@ analysis_complete()
 
 paths()
 {
-    local workload=$1 mode=$2 trace_root result_root legacy
-    trace_root=${QEMU_ROOT}/results_mp_4way
-    result_root=${DYNAMORIO_ROOT}/results/linux_mp_4way/default
-    trace="${trace_root}/${workload}_${mode}_${NUM_INST}.bin"
+    local workload=$1 mode=$2 legacy
+    trace="${TRACE_ROOT}/${workload}_${mode}_${NUM_INST}.bin"
     legacy="${trace%.bin}.log"
     if exists "${legacy}"; then
         ! exists "${trace}" || die "Both .bin and .log traces exist: ${trace}"
         trace=${legacy}
     fi
-    partial="${trace_root}/${workload}_${mode}_${NUM_INST}.partial"
-    console="${trace_root}/logs/qemu_${workload}_${mode}_${NUM_INST}.log"
-    output="${result_root}/${mode}/${workload}.txt"
+    partial="${TRACE_ROOT}/${workload}_${mode}_${NUM_INST}.partial"
+    console="${TRACE_ROOT}/logs/qemu_${workload}_${mode}_${NUM_INST}.log"
+    output="${RESULT_ROOT}/${mode}/${workload}.txt"
 }
 
 classify()
@@ -94,9 +95,9 @@ classify()
     paths "$1" "$2"
     # A running pre-rename batch must finish before these keys can be reused.
     if [[ $1 == *_p2 ]]; then
-        for path in "${QEMU_ROOT}/results_mp_4way/${1}_r1_${2}_${NUM_INST}."{bin,partial,log} \
-            "${QEMU_ROOT}/results_mp_4way/logs/qemu_${1}_r1_${2}_${NUM_INST}.log" \
-            "${DYNAMORIO_ROOT}/results/linux_mp_4way/default/${2}/${1}_r1.txt"{,.partial}; do
+        for path in "${TRACE_ROOT}/${1}_r1_${2}_${NUM_INST}."{bin,partial,log} \
+            "${TRACE_ROOT}/logs/qemu_${1}_r1_${2}_${NUM_INST}.log" \
+            "${RESULT_ROOT}/${2}/${1}_r1.txt"{,.partial}; do
             ! exists "${path}" || die "Naming migration still pending for $1/$2: ${path}"
         done
     fi
@@ -180,9 +181,6 @@ for workload in "${WORKLOADS[@]}"; do
 done
 echo "Plan: ${skip_count} complete, ${capture_count} new captures, ${simulate_count} retained traces to simulate"
 echo "Capture admission: at most ${MAX_QEMU} total QEMUs; ${MIN_AVAILABLE_GIB} GiB available before launch"
-if [[ -n ${capture_modes[fpt]:-}${capture_modes[ecpt]:-} ]] || (( simulate_count > 0 )); then
-    echo "NOTE: EMT address-space IDs are not yet preserved; completion does not validate multiprocess TLB accuracy." >&2
-fi
 ${dry_run} && exit 0
 
 for index in "${!actions[@]}"; do
@@ -280,7 +278,16 @@ analyze_trace()
     local skip=false format=tppt arch=radix
     case ${mode} in
         vanilla) skip=true ;;
-        fpt|ecpt) skip=true; format=emt; arch=${mode} ;;
+        fpt|ecpt)
+            skip=true
+            arch=${mode}
+            if emt_asid_trace "${trace}"; then
+                format=emt-asid
+            else
+                format=emt
+                echo "NOTE: Legacy EMT trace lacks address-space IDs: ${workload}/${mode}" >&2
+            fi
+            ;;
     esac
     echo "SIMULATE ${workload}/${mode}"
     # Only the simulator partial is disposable; keep the input on failure.
@@ -298,7 +305,7 @@ analyze_trace()
     echo "DONE ${workload}/${mode}; validated simulation, removed binary trace"
 }
 export DYNAMORIO_ROOT NUM_INST
-export -f analyze_trace analysis_complete
+export -f analyze_trace analysis_complete emt_asid_trace
 
 capture_resources_ready()
 {
@@ -306,9 +313,9 @@ capture_resources_ready()
     local -a owned_partials=()
     for pid in "${!capture_pids[@]}"; do
         index=${capture_pids[${pid}]}
-        owned_partials+=("${QEMU_ROOT}/results_mp_4way/${workloads[index]}_${modes[index]}_${NUM_INST}.partial")
+        owned_partials+=("${TRACE_ROOT}/${workloads[index]}_${modes[index]}_${NUM_INST}.partial")
     done
-    python3 - "${MAX_QEMU}" "${MIN_AVAILABLE_GIB}" "${ROOT}" "${owned_partials[@]}" <<'PY'
+    python3 - "${MAX_QEMU}" "${MIN_AVAILABLE_GIB}" "${TRACE_ROOT}" "${owned_partials[@]}" <<'PY'
 from pathlib import Path
 import os, shutil, sys
 partials = [p.encode() for p in sys.argv[4:]]
@@ -362,7 +369,7 @@ capture_trace()
             ;;
         fpt|ecpt)
             kernel=${EMT_ROOT}/linux-${mode}
-            env_args+=(QEMU_MEMORY=128G QEMU_TRACE_FORMAT=emt
+            env_args+=(QEMU_MEMORY=128G QEMU_TRACE_FORMAT=emt-asid
                 "QEMU_BIN=${EMT_ROOT}/qemu-${mode}/qemu-system-x86_64"
                 "TPPT_WORKLOAD_PLUGIN=${EMT_ROOT}/qemu-${mode}/tests/plugin/libexeclog.so")
             ;;
@@ -403,6 +410,9 @@ capture_trace()
     capture_pid=
     [[ -s ${partial} ]] && capture_complete "${console}" "${mode}" || \
         die "Capture incomplete: ${workload}/${mode} (QEMU status ${rc}); retained partial/logs"
+    if [[ ${mode} == fpt || ${mode} == ecpt ]]; then
+        emt_asid_trace "${partial}" || die "EMT capture missing address-space IDs: ${workload}/${mode}"
+    fi
     # EMT can return nonzero after emitting its complete instruction budget.
     echo "CAPTURED ${workload}/${mode} (QEMU status ${rc})"
     mv -- "${partial}" "${trace}"

@@ -1,0 +1,19 @@
+FPT L3+L2: use the folded page-table layout in mm_find_pmd()
+
+The generic PUD/PMD accessors index a folded directory as separate levels. Use the existing FPT accessors for the THP-capable L3+L2 profile and keep the scanner PMD validity checks intact.
+
+diff --git a/mm/rmap.c b/mm/rmap.c
+index f565a74e984a30fe731925e7146f6a876c1c6a39..609768dec809908ae2a81ee70c2c40334553c488 100644
+--- a/mm/rmap.c
++++ b/mm/rmap.c
+@@ -76,6 +76,10 @@
+ #include <linux/userfaultfd_k.h>
+ 
+ #include <asm/tlbflush.h>
++#if defined(CONFIG_X86_64_FPT_L3L2) && defined(CONFIG_TRANSPARENT_HUGEPAGE)
++/* mm_find_pmd() must index the folded FPT directory at L2. */
++#include <asm/fpt.h>
++#endif
+ 
+ #include <trace/events/tlb.h>
+ 

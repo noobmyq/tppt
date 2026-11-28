@@ -1,0 +1,113 @@
+Subject: [PATCH] execlog: record the active address space for each access
+Base-commit: a417c4ea5cf87a9cce3a95a9e0ddd8feafb4435a
+
+Emit versioned EMTASID1 records with the guest CR3 root when explicitly
+requested. The native memory record and legacy output layout are unchanged.
+
+diff --git a/tests/plugin/execlog.c b/tests/plugin/execlog.c
+index 28b12ad18477bdbebf51f8e7469760340d2c0622..c9e2a91578424da66d944d29d0609a9e15c025d1 100644
+--- a/tests/plugin/execlog.c
++++ b/tests/plugin/execlog.c
+@@ -53,6 +53,7 @@ static unsigned long max_ins_count;
+ static char bin_record_file_name[PATH_MAX];
+ static bool k_exec_only = false;
+ static bool prev_is_user = false;
++static bool log_address_space_ids;
+ 
+ 
+ // static uint32_t start_cmd = 0xD2874DU; /* xchg R10, R10 */
+@@ -130,6 +131,16 @@ typedef union BinaryRecord
+ 	MemRecord mem;
+ } BinaryRecord;
+ 
++typedef struct AddressSpaceRecord {
++    MemRecord record;
++    uint64_t cr3_root;
++} AddressSpaceRecord;
++
++static const struct {
++    char magic[8];
++    uint64_t record_size;
++} address_space_header = { "EMTASID1", sizeof(AddressSpaceRecord) };
++
+ //
+ // Globals
+ //
+@@ -199,6 +210,15 @@ static inline void open_bin_record(void)
+ 		instant_suicide();
+ 		return;
+ 	}
++    if (log_address_space_ids) {
++        if (fwrite(&address_space_header, sizeof(address_space_header), 1,
++                   log_handle.fp) != 1) {
++            perror("write EMTASID1 header");
++            instant_suicide();
++        }
++        printf("[Sim Plugin] Trace format EMTASID1, record size=%zu\n",
++               sizeof(AddressSpaceRecord));
++    }
+ 	printf("[Sim Plugin] Created binary log at %s\n", bin_record_file_name);
+ }
+ 
+@@ -207,6 +227,7 @@ static inline void close_bin_record(void)
+ 	if (log_handle.fp) {
+         flush_to_disk(log_handle.fp);
+ 		fclose(log_handle.fp);
++        log_handle.fp = NULL;
+ 
+         printf("[Sim Plugin] Closed binary log file descriptor\n");
+ 	}
+@@ -226,10 +247,24 @@ static inline void write_bin_log(uint64_t size, void* data)
+ 	}
+ }
+ 
++static inline void write_access_record(MemRecord *rec)
++{
++    if (!log_address_space_ids) {
++        write_bin_log(sizeof(*rec), rec);
++        return;
++    }
++
++    AddressSpaceRecord tagged = {
++        .record = *rec,
++        .cr3_root = qemu_plugin_read_cr3() & ~UINT64_C(0xfff),
++    };
++    write_bin_log(sizeof(tagged), &tagged);
++}
++
+ static inline void write_mem_record(MemRecord *rec)
+ {
+ 	rec->header = BIN_RECORD_TYPE_MEM;
+-	write_bin_log(sizeof(MemRecord), rec);
++	write_access_record(rec);
+ }
+ 
+ static inline void write_ins_record(InsRecord *rec, char* dias)
+@@ -248,7 +283,7 @@ static inline void write_ins_record(InsRecord *rec, char* dias)
+ static inline void write_ins_fetch(MemRecord *rec)
+ {
+ 	rec->header = BIN_RECORD_TYPE_FEC;
+-	write_bin_log(sizeof(MemRecord), rec);
++	write_access_record(rec);
+ 
+ #ifdef DEBUG_EXECLOG    
+     char buf[1024];
+@@ -698,10 +733,18 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
+ 										const qemu_info_t *info, int argc,
+ 										char **argv)
+ {
++    char *address_space_ids;
++
+     process_argv(argc, argv);
+ 	setup_bin_record_name();
+     setup_k_only();
+     setup_max_inst();
++    if (find_option("address_space_ids", &address_space_ids)) {
++        if (!streq(address_space_ids, "0") && !streq(address_space_ids, "1")) {
++            error_exit("[Sim Plugin] address_space_ids must be 0 or 1\n");
++        }
++        log_address_space_ids = streq(address_space_ids, "1");
++    }
+ 
+ 	open_bin_record();
+ 

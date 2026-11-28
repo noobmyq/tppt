@@ -10,8 +10,8 @@ readonly ROOT=${TPPT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 readonly QEMU_ROOT=${ROOT}/qemu-linux
 readonly DYNAMORIO_ROOT=${ROOT}/tp-emt-dynamorio
 readonly EMT_ROOT=${ROOT}/emt-baselines/build
-# Flatten L4+L3 only so FPT retains normal PMD huge-page leaves.
-readonly FPT_KERNEL_DIR=${EMT_ROOT}/linux-fpt-l4l3-thp
+# The folded L3+L2 node supports 2 MiB PMD leaves.
+readonly FPT_KERNEL_DIR=${EMT_ROOT}/linux-fpt-l3l2-thp
 readonly VANILLA_KERNEL_DIR=${TPPT_VANILLA_LINUX_FOLDER:-${ROOT}/linux-6.8}
 readonly TRACE_ROOT=${TPPT_TRACE_ROOT:-${QEMU_ROOT}/results_thp_tcmalloc_4way}
 readonly RESULT_ROOT=${TPPT_RESULT_ROOT:-${DYNAMORIO_ROOT}/results/linux_thp_tcmalloc_4way}
@@ -75,16 +75,12 @@ for kernel in "${FPT_KERNEL_DIR}" "${EMT_ROOT}/linux-ecpt"; do
         exit 1
     }
 done
-for option in X86_64_FPT X86_64_FPT_L4L3; do
+for option in X86_64_FPT X86_64_FPT_L3L2; do
     grep -q "^CONFIG_${option}=y$" "${FPT_KERNEL_DIR}/.config" || {
         echo "FPT THP kernel requires CONFIG_${option}=y" >&2
         exit 1
     }
 done
-if grep -Eq '^CONFIG_X86_64_FPT_(L3L2|L4L3L2L1)=y$' "${FPT_KERNEL_DIR}/.config"; then
-    echo "FPT THP kernel must leave L2 and L1 unflattened" >&2
-    exit 1
-fi
 [[ ${DYNAMORIO_ROOT}/build_linux/clients/bin64/drcachesim -nt \
    ${DYNAMORIO_ROOT}/clients/drcachesim/reader/qemu_file_reader.cpp ]] || {
     echo "Rebuild drcachesim after changing its EMT trace reader" >&2

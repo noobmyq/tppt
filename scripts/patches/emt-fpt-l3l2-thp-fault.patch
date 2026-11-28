@@ -1,0 +1,285 @@
+FPT L3+L2: prepare folded page tables for anonymous THP faults
+
+The enhanced THP deposit allocates missing upper levels using the radix
+allocator. This bypasses L3+L2 folding when a huge fault initializes an
+L4 slot. Prepare the PMD with the FPT allocator before locking it, for
+both private huge pages and the huge zero page.
+
+Allocate the directory outside the page-table lock and recheck its
+parent before publishing it. Publish the pointer and folded bit
+together, keep the separate-table fallback, and recheck that the PMD is
+empty under its lock before installing the huge entry.
+
+diff --git a/arch/x86/mm/fpt.c b/arch/x86/mm/fpt.c
+index 34a1a011a63313ea6a0bd3023caa6a4057a82f3a..f72229ed88108d48f9a68f51cc1446a56306fad4 100644
+--- a/arch/x86/mm/fpt.c
++++ b/arch/x86/mm/fpt.c
+@@ -373,65 +373,126 @@ static inline void set_fpt_parent_bit(pmd_t *pmd)
+ }
+ 
+ 
+-static int __pud_alloc_nolock(struct mm_struct *mm, p4d_t *p4d, unsigned long address)
++static pud_t *fpt_alloc_pud_table(struct mm_struct *mm, unsigned long address,
++				  bool *folded)
+ {
+-	pud_t *new = NULL;
+-	struct page *page = NULL;
+-	int i = 0;
+-	bool flattened_allocated;
++	pud_t *new;
++	struct page *page;
++	int i;
+ 
+-	if (get_fpt_attr_flags(mm) & FPT_L4_L3_FOLD_FLAG) {
+-		/* no allocation at PUD level for L4L3 folding */
+-		return 0;
+-	}
++	*folded = false;
++	if (!(get_fpt_attr_flags(mm) & FPT_L3_L2_FOLD_FLAG))
++		return pud_alloc_one(mm, address);
+ 
+-	if (get_fpt_attr_flags(mm) & FPT_L3_L2_FOLD_FLAG) {
+-		if (new = __alloc_flattened_page(mm, address)) {
+-			page = virt_to_page(new);
+-			for (i = 0; i < PTRS_PER_PUD; ++i, ++page) {
+-				pgtable_pmd_page_ctor(page);
+-			}
++	new = __alloc_flattened_page(mm, address);
++	if (!new)
++		return pud_alloc_one(mm, address);
++
++	page = virt_to_page(new);
++	for (i = 0; i < PTRS_PER_PUD; i++) {
++		if (!pgtable_pmd_page_ctor(page + i)) {
++			while (i)
++				pgtable_pmd_page_dtor(page + --i);
++			free_pages((unsigned long)new, FPT_FLATTENED_ALLOC_ORDER);
++			return pud_alloc_one(mm, address);
+ 		}
+ 	}
+-	
+-	flattened_allocated = true;
+-	if (!new){
+-		pr_info_verbose("No allocation made\n");
+-		new = pud_alloc_one(mm, address);
+-		flattened_allocated = false;
+-		if (!new)
+-			return -ENOMEM;
++	*folded = true;
++	return new;
++}
++
++static void fpt_free_pud_table(struct mm_struct *mm, pud_t *table, bool folded)
++{
++	struct page *page;
++	int i;
++
++	if (!folded) {
++		pud_free(mm, table);
++		return;
+ 	}
+-	
+-	smp_wmb(); /* See comment in __pte_alloc */
+ 
+-	// spin_lock(&mm->page_table_lock);
+-	if (!p4d_present(*p4d)) {
+-// #ifdef CONFIG_PGTABLE_OP_GENERALIZABLE		
+-// 		p4d_mk_pud_accessible(mm, p4d, address, new);
+-// #else	
+-		p4d_populate(mm, p4d, new);
+-		if (flattened_allocated) {
+-			set_fpt_parent_bit((pmd_t *)p4d);
+-			fpt_mm_inc_nr_pmds(mm, true);
+-		} else {
+-			fpt_mm_inc_nr_puds(mm, false);
+-		}
+-		pr_info_verbose("p4d at %llx p4d=%lx new at %llx\n", (uint64_t) p4d,  p4d->p4d, (uint64_t)new);
+-// #endif
++	page = virt_to_page(table);
++	for (i = 0; i < PTRS_PER_PUD; i++)
++		pgtable_pmd_page_dtor(page + i);
++	free_pages((unsigned long)table, FPT_FLATTENED_ALLOC_ORDER);
++}
++
++static void fpt_populate_pud_table(struct mm_struct *mm, p4d_t *p4d,
++				   pud_t *table, bool folded)
++{
++	smp_wmb(); /* See comment in __pte_alloc */
++	if (folded) {
++		paravirt_alloc_pud(mm, __pa(table) >> PAGE_SHIFT);
++		set_p4d(p4d, __p4d(_PAGE_TABLE | __pa(table) |
++				   NEXT_LEVEL_FOLDED_MASK));
++		fpt_mm_inc_nr_pmds(mm, true);
+ 	} else {
+-		if (flattened_allocated) {
+-			free_pages((unsigned long )new, FPT_FLATTENED_ALLOC_ORDER);
+-		} else {
+-			pud_free(mm, new);
+-		}
+-		
+-	}	/* Another has populated it */
+-		
+-	// spin_unlock(&mm->page_table_lock);
++		p4d_populate(mm, p4d, table);
++		fpt_mm_inc_nr_puds(mm, false);
++	}
++}
++
++static int __pud_alloc_nolock(struct mm_struct *mm, p4d_t *p4d, unsigned long address)
++{
++	pud_t *new;
++	bool folded;
++
++	if (get_fpt_attr_flags(mm) & FPT_L4_L3_FOLD_FLAG)
++		return 0;
++
++	new = fpt_alloc_pud_table(mm, address, &folded);
++	if (!new)
++		return -ENOMEM;
++
++	if (!p4d_present(*p4d))
++		fpt_populate_pud_table(mm, p4d, new, folded);
++	else
++		fpt_free_pud_table(mm, new, folded);
+ 	return 0;
+ }
+ 
++#if defined(CONFIG_X86_64_FPT_L3L2) && defined(CONFIG_TRANSPARENT_HUGEPAGE)
++/* Prepare the PMD before the fault handler takes the PMD lock. */
++pmd_t *fpt_pmd_alloc_for_thp(struct mm_struct *mm, unsigned long addr,
++			    tentry_t *tentry)
++{
++	pgd_t *pgd = fpt_pgd_offset_map_with_mm(mm, addr);
++	p4d_t *p4d = fpt_p4d_offset_map_with_mm(mm, pgd, addr);
++	pud_t *pud, *new;
++	pmd_t *pmd;
++	bool folded;
++
++	if (p4d_none(READ_ONCE(*p4d))) {
++		new = fpt_alloc_pud_table(mm, addr, &folded);
++		if (!new && p4d_none(READ_ONCE(*p4d)))
++			return NULL;
++
++		if (new) {
++			spin_lock(&mm->page_table_lock);
++			if (p4d_none(*p4d)) {
++				fpt_populate_pud_table(mm, p4d, new, folded);
++				new = NULL;
++			}
++			spin_unlock(&mm->page_table_lock);
++			if (new)
++				fpt_free_pud_table(mm, new, folded);
++		}
++	}
++
++	pud = fpt_pud_offset_map_with_mm(mm, p4d, addr);
++	if (should_skip_pud(mm, p4d))
++		pmd = fpt_pmd_offset_map_with_mm(mm, pud, addr);
++	else
++		pmd = pmd_alloc(mm, pud, addr);
++
++	tentry->ptep[PG_LEVEL_PGD] = PGDP_TO_GENPTEP(pgd);
++	tentry->ptep[PG_LEVEL_P4D] = P4DP_TO_GENPTEP(p4d);
++	tentry->ptep[PG_LEVEL_PUD] = PUDP_TO_GENPTEP(pud);
++	tentry->ptep[PG_LEVEL_PMD] = PMDP_TO_GENPTEP(pmd);
++	return pmd;
++}
++#endif
++
+ /*
+  * Allocate page middle directory.
+  * We've already handled the fast-path in-line.
+diff --git a/include/linux/pgtable_enhanced.h b/include/linux/pgtable_enhanced.h
+index a2324e1b4947e1969833fffdbe7cc0b471366c84..08c005b1e5a1f031af50f3226a1add105b4e4cb3 100644
+--- a/include/linux/pgtable_enhanced.h
++++ b/include/linux/pgtable_enhanced.h
+@@ -443,6 +443,11 @@ int aspace_trans_unstable(struct mm_struct *mm, tentry_t * tentry, unsigned long
+ 
+ int thp_eligible(struct vm_area_struct *vma, tentry_t * tentry, unsigned long addr, pgtable_level pg_size);
+ 
++#if defined(CONFIG_X86_64_FPT) && defined(CONFIG_X86_64_FPT_L3L2)
++pmd_t *fpt_pmd_alloc_for_thp(struct mm_struct *mm, unsigned long addr,
++			    tentry_t *tentry);
++#endif
++
+ static inline pgtable_level dec_page_size(struct mm_struct *mm, pgtable_level pg_size) {
+ 	pgtable_level res = pg_size - 1;
+ 	if (res == PG_LEVEL_P4D) {
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index 65a02e03490589ba1eaf8808e21e7ab44c2054d2..3b16ddca0374f7018094252f65cf45a47173a1e3 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -601,6 +601,20 @@ out:
+ }
+ EXPORT_SYMBOL_GPL(thp_get_unmapped_area);
+ 
++#ifdef CONFIG_ENHANCED_INTERFACE
++static bool huge_pmd_fault_empty(struct vm_fault *vmf)
++{
++	gen_pte_t entry = {};
++
++	if (!vmf->pmd)
++		return true;
++	entry.pmd = *vmf->pmd;
++	if (IS_ENABLED(CONFIG_X86_64_FPT) && IS_ENABLED(CONFIG_X86_64_FPT_L3L2))
++		return pmd_none(entry.pmd);
++	return !gen_pte_is_data_page(entry, PG_LEVEL_PMD);
++}
++#endif
++
+ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf,
+ 			struct page *page, gfp_t gfp)
+ {
+@@ -642,11 +656,7 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf,
+ #ifdef CONFIG_ENHANCED_INTERFACE
+ 	vmf->ptl = aspace_lockptr(vma->vm_mm, vmf->tentry, vmf->address, PG_LEVEL_PMD);
+ 	spin_lock(vmf->ptl);
+-	ret = 0;
+-	if (vmf->pmd) {
+-		gen_entry.pmd = *vmf->pmd;
+-	}
+-	if (!(vmf->pmd == NULL || !gen_pte_is_data_page(gen_entry, PG_LEVEL_PMD))) 
++	if (!huge_pmd_fault_empty(vmf))
+ #else
+ 
+ 	vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
+@@ -807,9 +817,6 @@ vm_fault_t do_huge_pmd_anonymous_page(struct vm_fault *vmf)
+ 	struct page *page;
+ 	unsigned long haddr = vmf->address & HPAGE_PMD_MASK;
+ 
+-#ifdef CONFIG_ENHANCED_INTERFACE
+-	gen_pte_t entry = {};
+-#endif
+ 	pr_info_verbose("addr=%lx pmdp at %llx vma at %llx start=%lx end=%lx\n",
+ 	 	vmf->address, (uint64_t) vmf->pmd, (uint64_t) vmf->vma, vmf->vma->vm_start, vmf->vma->vm_end);
+ 	if (!transhuge_vma_suitable(vma, haddr))
+@@ -818,6 +825,17 @@ vm_fault_t do_huge_pmd_anonymous_page(struct vm_fault *vmf)
+ 		return VM_FAULT_OOM;
+ 	if (unlikely(khugepaged_enter(vma, vma->vm_flags)))
+ 		return VM_FAULT_OOM;
++
++#if defined(CONFIG_ENHANCED_INTERFACE) && defined(CONFIG_X86_64_FPT) && \
++	defined(CONFIG_X86_64_FPT_L3L2)
++	/* Prepare the folded directory before either kind of THP fault. */
++	if (!vmf->pmd) {
++		vmf->pmd = fpt_pmd_alloc_for_thp(vma->vm_mm, haddr, vmf->tentry);
++		if (!vmf->pmd)
++			return VM_FAULT_OOM;
++	}
++#endif
++
+ 	if (!(vmf->flags & FAULT_FLAG_WRITE) &&
+ 			!mm_forbids_zeropage(vma->vm_mm) &&
+ 			transparent_hugepage_use_zero_page()) {
+@@ -838,10 +856,7 @@ vm_fault_t do_huge_pmd_anonymous_page(struct vm_fault *vmf)
+ 		vmf->ptl = aspace_lockptr(vma->vm_mm, vmf->tentry, vmf->address, PG_LEVEL_PMD);
+ 		spin_lock(vmf->ptl);
+ 		ret = 0;
+-		if (vmf->pmd) {
+-			entry.pmd = *vmf->pmd;
+-		}
+-		if (vmf->pmd == NULL || !gen_pte_is_data_page(entry, PG_LEVEL_PMD)) 
++		if (huge_pmd_fault_empty(vmf))
+ #else
+ 		vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
+ 		ret = 0;
